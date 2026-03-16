@@ -1,0 +1,14 @@
+numpy
+opencv-python
+streamlit
+torch
+torchvision
+tqdm
+albumentations
+pyyaml
+pydicom
+ultralytics
+fastapi
+uvicorn[standard]
+python-multipart
+python-dotenv
