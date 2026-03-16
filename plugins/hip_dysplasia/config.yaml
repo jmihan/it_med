@@ -1,0 +1,41 @@
+# Настройки плагина для анализа дисплазии тазобедренного сустава
+
+# Классификатор ResNet (опционально, второе мнение)
+classifier_weights: "weights/classifier.pt"
+
+# Детектор ключевых точек (YOLO Pose)
+model:
+  name: "yolo11n_pose_hip"
+  weights_path: "weights/hip_keypoints_v1.pt"
+  input_size: [640, 640]
+  device: "cpu"  # "cpu" или "cuda"
+  conf_threshold: 0.5
+
+# 8 ключевых точек
+keypoints:
+  names: ["L_TRC", "R_TRC", "L_ACE", "R_ACE", "L_FHC", "R_FHC", "L_FMM", "R_FMM"]
+  count: 8
+
+# Пороговые значения для постановки диагноза (в градусах)
+clinical_thresholds:
+  hilgenreiner_angle_max_normal: 30.0
+  alpha_angle_min_normal: 60.0
+
+# Настройки визуализации
+visualization:
+  colors:
+    keypoints_trc: [0, 255, 0]     # Зелёный — Y-хрящи
+    keypoints_ace: [255, 0, 0]     # Красный — крыша впадины
+    keypoints_fhc: [0, 0, 255]     # Синий — головки бедра
+    keypoints_fmm: [255, 165, 0]   # Оранжевый — метафизы
+    hilgenreiner_line: [0, 255, 0] # Зелёный
+    acetabular_line: [255, 165, 0] # Оранжевый
+    perkin_line: [255, 255, 0]     # Жёлтый
+    normal_line: [0, 255, 0]       # Зелёный
+    pathology_line: [0, 0, 255]    # Красный (BGR)
+  line_thickness: 2
+  point_radius: 5
+
+# XAI
+xai:
+  enable_gradcam: false  # Для детекции точек Grad-CAM не нужен
