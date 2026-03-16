@@ -61,8 +61,8 @@ def main():
                         help="Размер батча (default: 8)")
     parser.add_argument("--imgsz", type=int, default=640,
                         help="Размер входного изображения (default: 640)")
-    parser.add_argument("--device", default="0",
-                        help="Устройство: 0 для GPU, cpu для CPU (default: 0)")
+    parser.add_argument("--device", default=None,
+                        help="Устройство: 0 для GPU, cpu для CPU (default: авто)")
     parser.add_argument("--patience", type=int, default=50,
                         help="Early stopping patience (default: 50)")
     parser.add_argument("--name", default="hip_pose_v1",
@@ -71,6 +71,11 @@ def main():
                         help="Возобновить обучение с последнего чекпоинта")
 
     args = parser.parse_args()
+
+    # Автодетект устройства
+    if args.device is None:
+        import torch
+        args.device = "0" if torch.cuda.is_available() else "cpu"
 
     # Проверка данных
     if not check_dataset():

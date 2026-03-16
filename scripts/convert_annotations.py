@@ -1,350 +1,267 @@
 """
-Конвертер аннотаций из CVAT/COCO Keypoints в формат YOLO Pose.
+Конвертер аннотаций VIA (VGG Image Annotator) → YOLO Pose.
 
 Поддерживаемые входные форматы:
-  - COCO Keypoints JSON (экспорт из CVAT / Label Studio)
-  - CVAT for Images XML
+  - VIA JSON  (File → Export Annotations → JSON)
+  - VIA CSV   (File → Export Annotations → CSV)
 
-Выходной формат:
-  YOLO Pose .txt (один файл на изображение):
-    <class_id> <cx> <cy> <w> <h> <x0> <y0> <v0> ... <x7> <y7> <v7>
+Выходной формат YOLO Pose .txt (один файл на изображение):
+  <class_id> <cx> <cy> <w> <h> <x0> <y0> <v0> ... <x7> <y7> <v7>
   Все координаты нормализованы в [0, 1].
 
+Структура выходной директории:
+  output_dir/
+    train/images/   train/labels/
+    val/images/     val/labels/
+
+Порядок точек (8 штук, region_id 0..7 из VIA):
+  0: L_TRC   1: R_TRC   2: L_ACE   3: R_ACE
+  4: L_FHC   5: R_FHC   6: L_FMM   7: R_FMM
+
 Использование:
-  python scripts/convert_annotations.py \
-      --input data/keypoints/annotations.json \
-      --format coco \
-      --images-dir data/processed/train \
-      --output-dir data/keypoints \
-      --val-split 0.2
+  python scripts/convert_annotations.py
+  python scripts/convert_annotations.py --val-split 0.25 --seed 0
+  python scripts/convert_annotations.py \\
+      --norm   data/keypoints/via_export_csv\\ (norm1).csv \\
+      --patolog data/keypoints/via_export_csv\\ (patolog1).csv
 """
 
 import argparse
+import csv
 import json
-import os
 import random
 import shutil
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-# Порядок ключевых точек для YOLO Pose
-KEYPOINT_NAMES = [
-    "L_TRC", "R_TRC", "L_ACE", "R_ACE",
-    "L_FHC", "R_FHC", "L_FMM", "R_FMM",
-]
-NUM_KEYPOINTS = len(KEYPOINT_NAMES)
+# ── Конфигурация по умолчанию ────────────────────────────────────────────────
+ROOT = Path(__file__).resolve().parent.parent
+KP_DIR = ROOT / "data" / "keypoints"
+
+DEFAULT_NORM    = KP_DIR / "via_export_json (norm1).json"
+DEFAULT_PATOLOG = KP_DIR / "via_export_json (patolog1).json"
+DEFAULT_IMAGES  = ROOT / "data" / "processed" / "train"
+DEFAULT_OUT     = KP_DIR
+
+KEYPOINT_NAMES = ["L_TRC", "R_TRC", "L_ACE", "R_ACE",
+                  "L_FHC", "R_FHC", "L_FMM", "R_FMM"]
+NUM_KEYPOINTS  = len(KEYPOINT_NAMES)
+CLASS_ID       = 0          # один класс — pelvis
+BBOX_PADDING   = 0.15       # отступ bbox вокруг точек
 
 
-def parse_coco_keypoints(json_path: str) -> list:
+# ── Чтение VIA JSON ──────────────────────────────────────────────────────────
+def load_via_json(path: Path) -> dict[str, list[tuple[int, int]]]:
     """
-    Парсинг COCO Keypoints JSON.
+    VIA JSON: {filename+size: {filename, regions:[{shape_attributes:{name,cx,cy}}]}}
+    Возвращает {filename: [(cx, cy), ...]}
+    """
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    result = {}
+    for record in raw.values():
+        fname = record["filename"]
+        pts = []
+        for region in record.get("regions", []):
+            sa = region.get("shape_attributes", {})
+            if sa.get("name") == "point":
+                pts.append((int(sa["cx"]), int(sa["cy"])))
+        if pts:
+            result[fname] = pts
+    return result
 
-    Ожидаемая структура:
-    {
-      "images": [{"id": 1, "file_name": "img.png", "width": W, "height": H}, ...],
-      "annotations": [{
-        "image_id": 1,
-        "category_id": 1,
-        "bbox": [x, y, w, h],           # абсолютные координаты
-        "keypoints": [x0, y0, v0, x1, y1, v1, ...],  # 8 * 3 = 24 значения
-      }, ...],
-      "categories": [...]
+
+# ── Чтение VIA CSV ───────────────────────────────────────────────────────────
+def load_via_csv(path: Path) -> dict[str, list[tuple[int, int]]]:
+    """
+    VIA CSV: filename, ..., region_id, region_shape_attributes (JSON-строка)
+    Возвращает {filename: [(cx, cy), ...]} — точки в порядке region_id.
+    """
+    rows: dict[str, dict[int, tuple]] = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            fname = row["filename"]
+            sa = json.loads(row["region_shape_attributes"])
+            if sa.get("name") != "point":
+                continue
+            rid = int(row["region_id"])
+            rows.setdefault(fname, {})[rid] = (int(sa["cx"]), int(sa["cy"]))
+
+    return {
+        fname: [pts[i] for i in sorted(pts)]
+        for fname, pts in rows.items()
     }
 
-    Возвращает список dict: {
-      "image_file": str, "img_w": int, "img_h": int,
-      "bbox": (x, y, w, h), "keypoints": [(x, y, v), ...]
-    }
-    """
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
 
-    images_map = {img["id"]: img for img in data["images"]}
-    results = []
-
-    for ann in data["annotations"]:
-        img_info = images_map[ann["image_id"]]
-        img_w, img_h = img_info["width"], img_info["height"]
-
-        # Парсинг bbox COCO: [x_min, y_min, width, height]
-        bbox = ann.get("bbox")
-
-        # Парсинг keypoints: [x0, y0, v0, x1, y1, v1, ...]
-        raw_kpts = ann["keypoints"]
-        keypoints = []
-        for i in range(0, len(raw_kpts), 3):
-            kx, ky, kv = raw_kpts[i], raw_kpts[i + 1], raw_kpts[i + 2]
-            keypoints.append((kx, ky, kv))
-
-        results.append({
-            "image_file": img_info["file_name"],
-            "img_w": img_w,
-            "img_h": img_h,
-            "bbox": tuple(bbox) if bbox else None,
-            "keypoints": keypoints,
-        })
-
-    return results
+# ── Универсальный загрузчик ──────────────────────────────────────────────────
+def load_via(path: Path) -> dict[str, list[tuple[int, int]]]:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return load_via_json(path)
+    if suffix == ".csv":
+        return load_via_csv(path)
+    raise ValueError(f"Неизвестный формат '{path.suffix}'. Ожидается .json или .csv")
 
 
-def parse_cvat_xml(xml_path: str) -> list:
-    """
-    Парсинг CVAT for Images XML.
-
-    Структура:
-    <annotations>
-      <image id="0" name="img.png" width="W" height="H">
-        <skeleton label="pelvis">
-          <points label="L_TRC" points="x,y" occluded="0"/>
-          <points label="R_TRC" points="x,y" occluded="0"/>
-          ...
-        </skeleton>
-      </image>
-    </annotations>
-    """
-    tree = ET.parse(xml_path)
-    root = tree.getroot()
-    results = []
-
-    for image_elem in root.findall("image"):
-        img_file = image_elem.get("name")
-        img_w = int(image_elem.get("width"))
-        img_h = int(image_elem.get("height"))
-
-        for skeleton in image_elem.findall(".//skeleton"):
-            # Собираем точки по имени
-            points_by_name = {}
-            for pt in skeleton.findall("points"):
-                label = pt.get("label")
-                coords = pt.get("points").split(",")
-                occluded = int(pt.get("occluded", "0"))
-                x, y = float(coords[0]), float(coords[1])
-                # visibility: 0=не размечена, 1=occluded, 2=видимая
-                visibility = 1 if occluded else 2
-                points_by_name[label] = (x, y, visibility)
-
-            # Выстраиваем в правильном порядке
-            keypoints = []
-            for name in KEYPOINT_NAMES:
-                if name in points_by_name:
-                    keypoints.append(points_by_name[name])
-                else:
-                    keypoints.append((0.0, 0.0, 0))
-
-            results.append({
-                "image_file": img_file,
-                "img_w": img_w,
-                "img_h": img_h,
-                "bbox": None,  # Вычислим из точек
-                "keypoints": keypoints,
-            })
-
-    return results
+# ── Поиск изображения ────────────────────────────────────────────────────────
+def find_image(fname: str, images_dir: Path) -> Path | None:
+    direct = images_dir / fname
+    if direct.exists():
+        return direct
+    for p in images_dir.rglob(fname):
+        return p
+    return None
 
 
-def compute_bbox_from_keypoints(keypoints: list, img_w: int, img_h: int,
-                                 padding_ratio: float = 0.2) -> tuple:
-    """
-    Вычисляет bounding box из видимых ключевых точек с отступом.
-    Возвращает (x_min, y_min, width, height) в абсолютных координатах.
-    """
-    visible_pts = [(x, y) for x, y, v in keypoints if v > 0]
-    if not visible_pts:
-        return (0, 0, img_w, img_h)
-
-    xs = [p[0] for p in visible_pts]
-    ys = [p[1] for p in visible_pts]
-
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-
-    w = x_max - x_min
-    h = y_max - y_min
-
-    # Добавляем отступ
-    pad_x = w * padding_ratio
-    pad_y = h * padding_ratio
-
-    x_min = max(0, x_min - pad_x)
-    y_min = max(0, y_min - pad_y)
-    x_max = min(img_w, x_max + pad_x)
-    y_max = min(img_h, y_max + pad_y)
-
-    return (x_min, y_min, x_max - x_min, y_max - y_min)
+# ── Размер изображения ───────────────────────────────────────────────────────
+def image_size(path: Path) -> tuple[int, int]:
+    """Возвращает (width, height) без загрузки всего файла."""
+    from PIL import Image
+    with Image.open(path) as im:
+        return im.size   # (w, h)
 
 
-def to_yolo_pose_line(annotation: dict) -> str:
-    """
-    Конвертирует аннотацию в строку YOLO Pose формата:
-    <class_id> <cx> <cy> <w> <h> <x0> <y0> <v0> ... <x7> <y7> <v7>
-    Все координаты нормализованы в [0, 1].
-    """
-    img_w = annotation["img_w"]
-    img_h = annotation["img_h"]
+# ── bbox из точек ────────────────────────────────────────────────────────────
+def bbox_from_points(pts: list[tuple[int, int]],
+                     img_w: int, img_h: int) -> tuple[float, float, float, float]:
+    """Возвращает (cx, cy, w, h) нормализованные [0,1] с отступом."""
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    x0, x1 = min(xs), max(xs)
+    y0, y1 = min(ys), max(ys)
 
-    # Bbox
-    bbox = annotation["bbox"]
-    if bbox is None:
-        bbox = compute_bbox_from_keypoints(annotation["keypoints"], img_w, img_h)
+    bw = x1 - x0
+    bh = y1 - y0
+    pad_x = bw * BBOX_PADDING
+    pad_y = bh * BBOX_PADDING
 
-    bx, by, bw, bh = bbox
-    # Конвертация в центр + размер, нормализация
-    cx = (bx + bw / 2) / img_w
-    cy = (by + bh / 2) / img_h
-    nw = bw / img_w
-    nh = bh / img_h
+    x0 = max(0, x0 - pad_x)
+    y0 = max(0, y0 - pad_y)
+    x1 = min(img_w, x1 + pad_x)
+    y1 = min(img_h, y1 + pad_y)
 
-    # Ограничиваем значения
-    cx = max(0.0, min(1.0, cx))
-    cy = max(0.0, min(1.0, cy))
-    nw = max(0.0, min(1.0, nw))
-    nh = max(0.0, min(1.0, nh))
+    cx = ((x0 + x1) / 2) / img_w
+    cy = ((y0 + y1) / 2) / img_h
+    nw = (x1 - x0) / img_w
+    nh = (y1 - y0) / img_h
+    return cx, cy, nw, nh
 
-    parts = [f"0 {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"]
 
-    # Ключевые точки
-    for kx, ky, kv in annotation["keypoints"]:
-        if kv > 0:
-            nx = kx / img_w
-            ny = ky / img_h
-            nx = max(0.0, min(1.0, nx))
-            ny = max(0.0, min(1.0, ny))
+# ── Строка YOLO Pose ─────────────────────────────────────────────────────────
+def to_yolo_line(pts: list[tuple[int, int]], img_w: int, img_h: int) -> str:
+    cx, cy, nw, nh = bbox_from_points(pts, img_w, img_h)
+    parts = [f"{CLASS_ID} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"]
+
+    for i in range(NUM_KEYPOINTS):
+        if i < len(pts):
+            kx = max(0.0, min(1.0, pts[i][0] / img_w))
+            ky = max(0.0, min(1.0, pts[i][1] / img_h))
+            parts.append(f"{kx:.6f} {ky:.6f} 2")   # v=2: видимая
         else:
-            nx, ny = 0.0, 0.0
-        parts.append(f"{nx:.6f} {ny:.6f} {int(kv)}")
+            parts.append("0.000000 0.000000 0")
 
     return " ".join(parts)
 
 
-def find_image_path(image_file: str, images_dir: str) -> str | None:
-    """Ищет файл изображения в images_dir (в том числе в подпапках)."""
-    # Прямой путь
-    direct = os.path.join(images_dir, image_file)
-    if os.path.exists(direct):
-        return direct
-
-    # Поиск по имени файла в подпапках
-    basename = os.path.basename(image_file)
-    for root, _, files in os.walk(images_dir):
-        if basename in files:
-            return os.path.join(root, basename)
-
-    return None
-
-
-def convert_and_split(annotations: list, images_dir: str, output_dir: str,
-                      val_split: float = 0.2, seed: int = 42):
-    """
-    Конвертирует аннотации и раскладывает в train/val структуру YOLO.
-    """
+# ── Конвертация и сплит ──────────────────────────────────────────────────────
+def convert_and_split(
+    annotations: list[tuple[str, list]],   # [(filename, [(cx,cy)...]), ...]
+    images_dir: Path,
+    output_dir: Path,
+    val_split: float,
+    seed: int,
+):
     random.seed(seed)
-    random.shuffle(annotations)
+    items = annotations[:]
+    random.shuffle(items)
 
-    val_count = int(len(annotations) * val_split)
-    val_set = annotations[:val_count]
-    train_set = annotations[val_count:]
+    n_val   = max(1, round(len(items) * val_split))
+    splits  = {"val": items[:n_val], "train": items[n_val:]}
 
-    for split_name, split_data in [("train", train_set), ("val", val_set)]:
-        img_dir = os.path.join(output_dir, split_name, "images")
-        lbl_dir = os.path.join(output_dir, split_name, "labels")
-        os.makedirs(img_dir, exist_ok=True)
-        os.makedirs(lbl_dir, exist_ok=True)
+    stats = {}
+    for split, data in splits.items():
+        img_out = output_dir / split / "images"
+        lbl_out = output_dir / split / "labels"
+        img_out.mkdir(parents=True, exist_ok=True)
+        lbl_out.mkdir(parents=True, exist_ok=True)
 
-        count = 0
-        for ann in split_data:
-            # Найти исходное изображение
-            src_img = find_image_path(ann["image_file"], images_dir)
-            if src_img is None:
-                print(f"[WARN] Изображение не найдено: {ann['image_file']}, пропуск")
+        ok = skip = 0
+        for fname, pts in data:
+            src = find_image(fname, images_dir)
+            if src is None:
+                print(f"  [WARN] не найдено: {fname}")
+                skip += 1
                 continue
 
-            # Имя файла без расширения
-            stem = Path(ann["image_file"]).stem
-            ext = Path(src_img).suffix
+            w, h = image_size(src)
 
             # Копируем изображение
-            dst_img = os.path.join(img_dir, f"{stem}{ext}")
-            if not os.path.exists(dst_img):
-                shutil.copy2(src_img, dst_img)
+            dst_img = img_out / src.name
+            if not dst_img.exists():
+                shutil.copy2(src, dst_img)
 
-            # Создаём label файл
-            label_line = to_yolo_pose_line(ann)
-            label_path = os.path.join(lbl_dir, f"{stem}.txt")
+            # Записываем label
+            line = to_yolo_line(pts, w, h)
+            lbl_path = lbl_out / (src.stem + ".txt")
+            with open(lbl_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
 
-            # Если файл уже существует — дописываем (несколько объектов на снимке)
-            with open(label_path, "a", encoding="utf-8") as f:
-                f.write(label_line + "\n")
+            ok += 1
 
-            count += 1
+        stats[split] = (ok, skip)
 
-        print(f"[{split_name}] Сконвертировано {count} аннотаций")
-
-    print(f"\nГотово! Структура:")
-    print(f"  {output_dir}/train/images/")
-    print(f"  {output_dir}/train/labels/")
-    print(f"  {output_dir}/val/images/")
-    print(f"  {output_dir}/val/labels/")
+    return stats
 
 
+# ── main ─────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Конвертер аннотаций CVAT/COCO → YOLO Pose"
+        description="Конвертер VIA JSON/CSV → YOLO Pose"
     )
-    parser.add_argument(
-        "--input", required=True,
-        help="Путь к файлу аннотаций (JSON для COCO, XML для CVAT)"
-    )
-    parser.add_argument(
-        "--format", choices=["coco", "cvat"], required=True,
-        help="Формат входного файла: coco (COCO Keypoints JSON) или cvat (CVAT XML)"
-    )
-    parser.add_argument(
-        "--images-dir", required=True,
-        help="Директория с исходными изображениями"
-    )
-    parser.add_argument(
-        "--output-dir", default="data/keypoints",
-        help="Директория для выходных данных (default: data/keypoints)"
-    )
-    parser.add_argument(
-        "--val-split", type=float, default=0.2,
-        help="Доля валидационной выборки (default: 0.2)"
-    )
-    parser.add_argument(
-        "--seed", type=int, default=42,
-        help="Random seed для воспроизводимости разбиения (default: 42)"
-    )
-
+    parser.add_argument("--norm",    default=str(DEFAULT_NORM),
+                        help="Файл аннотаций нормы (.json или .csv)")
+    parser.add_argument("--patolog", default=str(DEFAULT_PATOLOG),
+                        help="Файл аннотаций патологии (.json или .csv)")
+    parser.add_argument("--images-dir", default=str(DEFAULT_IMAGES),
+                        help="Корневая папка с изображениями")
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUT),
+                        help="Выходная директория YOLO датасета")
+    parser.add_argument("--val-split", type=float, default=0.2)
+    parser.add_argument("--seed",      type=int,   default=42)
     args = parser.parse_args()
 
-    # Парсинг аннотаций
-    print(f"Чтение аннотаций из {args.input} (формат: {args.format})...")
-    if args.format == "coco":
-        annotations = parse_coco_keypoints(args.input)
-    else:
-        annotations = parse_cvat_xml(args.input)
+    norm_path    = Path(args.norm)
+    patolog_path = Path(args.patolog)
+    images_dir   = Path(args.images_dir)
+    output_dir   = Path(args.output_dir)
 
-    print(f"Найдено {len(annotations)} аннотаций")
+    # Загрузка
+    print(f"Норма:     {norm_path.name}")
+    norm = load_via(norm_path)
+    print(f"  {len(norm)} изображений, {sum(len(v) for v in norm.values())} точек")
 
-    if not annotations:
-        print("Нет аннотаций для конвертации!")
-        return
+    print(f"Патология: {patolog_path.name}")
+    pat = load_via(patolog_path)
+    print(f"  {len(pat)} изображений, {sum(len(v) for v in pat.values())} точек")
 
     # Проверка количества точек
-    for ann in annotations:
-        if len(ann["keypoints"]) != NUM_KEYPOINTS:
-            print(f"[WARN] {ann['image_file']}: ожидалось {NUM_KEYPOINTS} точек, "
-                  f"получено {len(ann['keypoints'])}")
+    all_data = list(norm.items()) + list(pat.items())
+    for fname, pts in all_data:
+        if len(pts) != NUM_KEYPOINTS:
+            print(f"  [WARN] {fname}: {len(pts)} точек (ожидалось {NUM_KEYPOINTS})")
 
-    # Конвертация и разбиение
-    convert_and_split(
-        annotations=annotations,
-        images_dir=args.images_dir,
-        output_dir=args.output_dir,
-        val_split=args.val_split,
-        seed=args.seed,
-    )
+    # Конвертация
+    print(f"\nКонвертация -> YOLO Pose (val={args.val_split*100:.0f}%, seed={args.seed}) ...")
+    stats = convert_and_split(all_data, images_dir, output_dir, args.val_split, args.seed)
+
+    print(f"\nРезультат:")
+    for split, (ok, skip) in stats.items():
+        print(f"  {split:5s}: {ok} сконвертировано, {skip} пропущено")
+
+    print(f"\nСтруктура:")
+    for split in ("train", "val"):
+        print(f"  {output_dir / split / 'images'}")
+        print(f"  {output_dir / split / 'labels'}")
 
 
 if __name__ == "__main__":
