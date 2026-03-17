@@ -95,6 +95,3 @@ class ResNetClassifier(BaseMLModel):
             "prob_normal": prob_normal,
             "prob_pathology": prob_pathology,
         }
-
-# Для обратной совместимости, если где-то используется старое имя
-CNNClassifier = ResNetClassifier

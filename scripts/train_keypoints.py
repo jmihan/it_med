@@ -53,14 +53,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Обучение YOLOv11-Pose для детекции точек таза"
     )
-    parser.add_argument("--model", default="yolo11n-pose.pt",
-                        help="Предобученная модель (default: yolo11n-pose.pt)")
+    parser.add_argument("--model", default="yolo11s-pose.pt",
+                        help="Предобученная модель (default: yolo11s-pose.pt)")
     parser.add_argument("--epochs", type=int, default=300,
                         help="Количество эпох (default: 300)")
     parser.add_argument("--batch", type=int, default=8,
                         help="Размер батча (default: 8)")
-    parser.add_argument("--imgsz", type=int, default=640,
-                        help="Размер входного изображения (default: 640)")
+    parser.add_argument("--imgsz", type=int, default=800,
+                        help="Размер входного изображения (default: 800)")
     parser.add_argument("--device", default=None,
                         help="Устройство: 0 для GPU, cpu для CPU (default: авто)")
     parser.add_argument("--patience", type=int, default=50,

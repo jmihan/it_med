@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import numpy as np
 
+
 class BaseMLModel(ABC):
     """
     Базовый класс для нейросетей.
@@ -12,15 +13,15 @@ class BaseMLModel(ABC):
 
     @abstractmethod
     def _load_model(self):
-        """TODO: Загрузка весов (torch.load или onnxruntime.InferenceSession)"""
+        """Загрузка модели и весов."""
         pass
 
     @abstractmethod
     def preprocess(self, image: np.ndarray) -> np.ndarray:
-        """TODO: Ресайз, нормализация, конвертация HWC -> CHW"""
+        """Предобработка изображения для инференса."""
         pass
 
     @abstractmethod
     def predict(self, image: np.ndarray) -> any:
-        """TODO: Полный цикл: preprocess -> forward pass -> postprocess"""
+        """Полный цикл: предобработка -> инференс -> постобработка."""
         pass
