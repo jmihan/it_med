@@ -2,7 +2,7 @@ from core.base_plugin import BaseMedicalPlugin
 from .metrics import calculate_all_metrics
 from models.keypoint_detector import KeypointDetector
 from models.classifier import ResNetClassifier
-from visualizating.drawing import ImageAnnotator
+from visualization.drawing import ImageAnnotator
 
 import numpy as np
 from typing import Dict, Any
@@ -105,8 +105,8 @@ class HipDysplasiaPlugin(BaseMedicalPlugin):
                     weights_path=classifier_weights,
                     device=device,
                 )
-            except Exception:
-                pass  # Классификатор не обязателен
+            except Exception as e:
+                print(f"[WARN] Классификатор не загружен: {e}")
 
     def analyze(self, image):
         """
@@ -158,6 +158,11 @@ class HipDysplasiaPlugin(BaseMedicalPlugin):
             "classification": classification_result,
             "method": "geometric",
         }
+
+    def generate_explanation(self, results: Dict):
+        """Генерация пошагового объяснения для студенческого режима."""
+        from .xai import generate_explanation
+        return generate_explanation(results)
 
     def get_visualization_layers(self, image: np.ndarray, results: Dict) -> Dict[str, np.ndarray]:
         """Генерация отдельных визуализационных слоёв."""

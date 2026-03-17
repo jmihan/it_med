@@ -22,16 +22,19 @@
     python scripts/run_explainer.py --image scan.png --method gradcam++ --backbone resnet50
 
 """
-import os
 import sys
 import argparse
+from pathlib import Path
+
 import cv2
 import numpy as np
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from models.classifier import ResNetClassifier
-from visualizating.explainers import ModelExplainer
+from visualization.explainers import ModelExplainer
+from core.image_io import load_image
 
 
 def parse_args():
@@ -46,33 +49,6 @@ def parse_args():
     parser.add_argument("--save",     default=None,           help="Сохранить результат в файл вместо показа")
     parser.add_argument("--device",   default="cpu",          help="cpu | cuda")
     return parser.parse_args()
-
-
-def load_image(path: str) -> np.ndarray:
-    """Загружает PNG/JPG или DICOM, возвращает BGR np.ndarray."""
-    if path.lower().endswith(".dcm") or not path.lower().endswith((".png", ".jpg", ".jpeg")):
-        try:
-            import pydicom
-            ds = pydicom.dcmread(path)
-            img = ds.pixel_array.astype(float)
-            img_min, img_max = img.min(), img.max()
-            if img_max > img_min:
-                img = (img - img_min) * (255.0 / (img_max - img_min))
-            img = img.astype(np.uint8)
-            if img.ndim == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            return img
-        except Exception as e:
-            print(f"[DICOM] Не удалось прочитать как DICOM: {e}, пробуем через OpenCV...")
-
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        raise FileNotFoundError(f"Не удалось загрузить изображение: {path}")
-    if img.ndim == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    elif img.shape[2] == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-    return img
 
 
 MAX_DISPLAY = 900  # максимальная сторона окна при первом показе
@@ -134,7 +110,6 @@ def main():
         combined = np.hstack([label_normal, label_pathology])
 
         if args.save:
-            base, ext = os.path.splitext(args.save)
             show_or_save("Both classes", combined, args.save)
         else:
             show_or_save("GradCAM — Normal vs Pathology", combined)

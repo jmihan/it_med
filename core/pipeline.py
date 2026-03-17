@@ -8,7 +8,7 @@ import numpy as np
 from typing import Dict, Any, List, Tuple, Generator
 
 from core.registry import PluginRegistry
-from visualizating.drawing import ImageAnnotator
+from visualization.drawing import ImageAnnotator
 
 
 class AnalysisPipeline:
@@ -19,7 +19,7 @@ class AnalysisPipeline:
 
     def __init__(self):
         self._plugin_cache = {}  # {(name, config_path): plugin_instance}
-        self._explainer_cache = {}  # {plugin_name: ModelExplainer}
+        self._explainer_cache = {}  # {plugin_id: ModelExplainer}
 
     def _get_plugin(self, plugin_name: str, config_path: str = None):
         """Получить или создать экземпляр плагина (с кэшированием)."""
@@ -45,13 +45,14 @@ class AnalysisPipeline:
         plugin_id = id(plugin)
         if plugin_id not in self._explainer_cache:
             try:
-                from visualizating.explainers import ModelExplainer
+                from visualization.explainers import ModelExplainer
                 self._explainer_cache[plugin_id] = ModelExplainer(
                     model=classifier.model,
                     device=str(next(classifier.model.parameters()).device),
                     method="gradcam",
                 )
-            except Exception:
+            except Exception as e:
+                print(f"[WARN] Не удалось создать ModelExplainer: {e}")
                 self._explainer_cache[plugin_id] = None
         return self._explainer_cache[plugin_id]
 
@@ -90,28 +91,23 @@ class AnalysisPipeline:
         # 5. Послойные визуализации
         results["layer_images"] = plugin.get_visualization_layers(image, results)
 
-        # 6. GradCAM (для студенческого режима или по запросу)
+        # 6. GradCAM (только для студенческого режима)
         results["heatmap"] = None
         results["heatmap_overlay"] = None
 
-        if mode == 'student' or True:  # Всегда генерируем, если доступен
+        if mode == 'student':
             explainer = self._get_explainer(plugin)
             if explainer is not None:
                 try:
                     heatmap = explainer.get_heatmap(image, class_id=1)  # Патология
                     results["heatmap"] = heatmap
                     results["heatmap_overlay"] = ImageAnnotator.overlay_heatmap(image, heatmap)
-                    # Добавляем в слои
                     results["layer_images"]["gradcam"] = results["heatmap_overlay"]
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[WARN] GradCAM ошибка: {e}")
 
-        # 7. Текстовые объяснения
-        try:
-            from plugins.hip_dysplasia.xai import generate_explanation
-            results["explanation_steps"] = generate_explanation(results)
-        except Exception:
-            results["explanation_steps"] = []
+        # 7. Текстовые объяснения (делегируется плагину)
+        results["explanation_steps"] = plugin.generate_explanation(results)
 
         return results
 
