@@ -1,29 +1,26 @@
 """
-Конвертер аннотаций VIA (VGG Image Annotator) → YOLO Pose.
+Конвертер аннотаций VIA (VGG Image Annotator) -> YOLO Pose.
 
-Поддерживаемые входные форматы:
-  - VIA JSON  (File → Export Annotations → JSON)
-  - VIA CSV   (File → Export Annotations → CSV)
+Читает три файла разметки (норма, патология, тест), извлекает только
+point-регионы (игнорирует rect), конвертирует в YOLO Pose формат
+и делит на train/val.
 
-Выходной формат YOLO Pose .txt (один файл на изображение):
+Входные файлы (в data/keypoints/):
+  annotations_norm.json    — 45 изображений нормы
+  annotations_patolog.json — 45 изображений патологии
+  annotations_test.json    — 24 тестовых изображения
+
+Выходной формат YOLO Pose .txt:
   <class_id> <cx> <cy> <w> <h> <x0> <y0> <v0> ... <x7> <y7> <v7>
   Все координаты нормализованы в [0, 1].
 
-Структура выходной директории:
-  output_dir/
-    train/images/   train/labels/
-    val/images/     val/labels/
-
-Порядок точек (8 штук, region_id 0..7 из VIA):
-  0: L_TRC   1: R_TRC   2: L_ACE   3: R_ACE
-  4: L_FHC   5: R_FHC   6: L_FMM   7: R_FMM
+Порядок точек (8 штук):
+  0: L_TRC  1: R_TRC  2: L_ACE  3: R_ACE
+  4: L_FHC  5: R_FHC  6: L_FMM  7: R_FMM
 
 Использование:
   python scripts/convert_annotations.py
-  python scripts/convert_annotations.py --val-split 0.25 --seed 0
-  python scripts/convert_annotations.py \\
-      --norm   data/keypoints/via_export_csv\\ (norm1).csv \\
-      --patolog data/keypoints/via_export_csv\\ (patolog1).csv
+  python scripts/convert_annotations.py --val-split 0.2 --seed 42
 """
 
 import argparse
@@ -31,31 +28,28 @@ import csv
 import json
 import random
 import shutil
+import sys
 from pathlib import Path
 
+from PIL import Image
 
-# ── Конфигурация по умолчанию ────────────────────────────────────────────────
-ROOT = Path(__file__).resolve().parent.parent
-KP_DIR = ROOT / "data" / "keypoints"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-DEFAULT_NORM    = KP_DIR / "via_export_json (norm1).json"
-DEFAULT_PATOLOG = KP_DIR / "via_export_json (patolog1).json"
-DEFAULT_IMAGES  = ROOT / "data" / "processed" / "train"
+from scripts._utils import KP_DIR, KEYPOINT_NAMES, find_image
+
+DEFAULT_NORM    = KP_DIR / "annotations_norm.json"
+DEFAULT_PATOLOG = KP_DIR / "annotations_patolog.json"
+DEFAULT_TEST    = KP_DIR / "annotations_test.json"
 DEFAULT_OUT     = KP_DIR
 
-KEYPOINT_NAMES = ["L_TRC", "R_TRC", "L_ACE", "R_ACE",
-                  "L_FHC", "R_FHC", "L_FMM", "R_FMM"]
 NUM_KEYPOINTS  = len(KEYPOINT_NAMES)
-CLASS_ID       = 0          # один класс — pelvis
-BBOX_PADDING   = 0.15       # отступ bbox вокруг точек
+CLASS_ID       = 0
+BBOX_PADDING   = 0.15
 
 
-# ── Чтение VIA JSON ──────────────────────────────────────────────────────────
+# ── Чтение VIA JSON (только point) ───────────────────────────────────────────
 def load_via_json(path: Path) -> dict[str, list[tuple[int, int]]]:
-    """
-    VIA JSON: {filename+size: {filename, regions:[{shape_attributes:{name,cx,cy}}]}}
-    Возвращает {filename: [(cx, cy), ...]}
-    """
     with open(path, encoding="utf-8") as f:
         raw = json.load(f)
     result = {}
@@ -71,12 +65,8 @@ def load_via_json(path: Path) -> dict[str, list[tuple[int, int]]]:
     return result
 
 
-# ── Чтение VIA CSV ───────────────────────────────────────────────────────────
+# ── Чтение VIA CSV (только point) ────────────────────────────────────────────
 def load_via_csv(path: Path) -> dict[str, list[tuple[int, int]]]:
-    """
-    VIA CSV: filename, ..., region_id, region_shape_attributes (JSON-строка)
-    Возвращает {filename: [(cx, cy), ...]} — точки в порядке region_id.
-    """
     rows: dict[str, dict[int, tuple]] = {}
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
@@ -86,45 +76,25 @@ def load_via_csv(path: Path) -> dict[str, list[tuple[int, int]]]:
                 continue
             rid = int(row["region_id"])
             rows.setdefault(fname, {})[rid] = (int(sa["cx"]), int(sa["cy"]))
-
     return {
         fname: [pts[i] for i in sorted(pts)]
         for fname, pts in rows.items()
     }
 
 
-# ── Универсальный загрузчик ──────────────────────────────────────────────────
 def load_via(path: Path) -> dict[str, list[tuple[int, int]]]:
     suffix = path.suffix.lower()
     if suffix == ".json":
         return load_via_json(path)
     if suffix == ".csv":
         return load_via_csv(path)
-    raise ValueError(f"Неизвестный формат '{path.suffix}'. Ожидается .json или .csv")
+    raise ValueError(f"Неизвестный формат '{suffix}'. Ожидается .json или .csv")
 
 
-# ── Поиск изображения ────────────────────────────────────────────────────────
-def find_image(fname: str, images_dir: Path) -> Path | None:
-    direct = images_dir / fname
-    if direct.exists():
-        return direct
-    for p in images_dir.rglob(fname):
-        return p
-    return None
 
-
-# ── Размер изображения ───────────────────────────────────────────────────────
-def image_size(path: Path) -> tuple[int, int]:
-    """Возвращает (width, height) без загрузки всего файла."""
-    from PIL import Image
-    with Image.open(path) as im:
-        return im.size   # (w, h)
-
-
-# ── bbox из точек ────────────────────────────────────────────────────────────
+# ── bbox из точек ─────────────────────────────────────────────────────────────
 def bbox_from_points(pts: list[tuple[int, int]],
                      img_w: int, img_h: int) -> tuple[float, float, float, float]:
-    """Возвращает (cx, cy, w, h) нормализованные [0,1] с отступом."""
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     x0, x1 = min(xs), max(xs)
@@ -147,36 +117,33 @@ def bbox_from_points(pts: list[tuple[int, int]],
     return cx, cy, nw, nh
 
 
-# ── Строка YOLO Pose ─────────────────────────────────────────────────────────
+# ── Строка YOLO Pose ──────────────────────────────────────────────────────────
 def to_yolo_line(pts: list[tuple[int, int]], img_w: int, img_h: int) -> str:
     cx, cy, nw, nh = bbox_from_points(pts, img_w, img_h)
     parts = [f"{CLASS_ID} {cx:.6f} {cy:.6f} {nw:.6f} {nh:.6f}"]
-
     for i in range(NUM_KEYPOINTS):
         if i < len(pts):
             kx = max(0.0, min(1.0, pts[i][0] / img_w))
             ky = max(0.0, min(1.0, pts[i][1] / img_h))
-            parts.append(f"{kx:.6f} {ky:.6f} 2")   # v=2: видимая
+            parts.append(f"{kx:.6f} {ky:.6f} 2")
         else:
             parts.append("0.000000 0.000000 0")
-
     return " ".join(parts)
 
 
-# ── Конвертация и сплит ──────────────────────────────────────────────────────
+# ── Конвертация и сплит ───────────────────────────────────────────────────────
 def convert_and_split(
-    annotations: list[tuple[str, list]],   # [(filename, [(cx,cy)...]), ...]
-    images_dir: Path,
+    annotations: list[tuple[str, list]],
     output_dir: Path,
     val_split: float,
     seed: int,
-):
+) -> dict:
     random.seed(seed)
     items = annotations[:]
     random.shuffle(items)
 
-    n_val   = max(1, round(len(items) * val_split))
-    splits  = {"val": items[:n_val], "train": items[n_val:]}
+    n_val  = max(1, round(len(items) * val_split))
+    splits = {"val": items[:n_val], "train": items[n_val:]}
 
     stats = {}
     for split, data in splits.items():
@@ -187,23 +154,22 @@ def convert_and_split(
 
         ok = skip = 0
         for fname, pts in data:
-            src = find_image(fname, images_dir)
+            src = find_image(fname)
             if src is None:
                 print(f"  [WARN] не найдено: {fname}")
                 skip += 1
                 continue
 
-            w, h = image_size(src)
+            with Image.open(src) as im:
+                w, h = im.size
 
-            # Копируем изображение
             dst_img = img_out / src.name
             if not dst_img.exists():
                 shutil.copy2(src, dst_img)
 
-            # Записываем label
             line = to_yolo_line(pts, w, h)
             lbl_path = lbl_out / (src.stem + ".txt")
-            with open(lbl_path, "a", encoding="utf-8") as f:
+            with open(lbl_path, "w", encoding="utf-8") as f:
                 f.write(line + "\n")
 
             ok += 1
@@ -216,52 +182,43 @@ def convert_and_split(
 # ── main ─────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Конвертер VIA JSON/CSV → YOLO Pose"
+        description="Конвертер VIA JSON/CSV -> YOLO Pose"
     )
-    parser.add_argument("--norm",    default=str(DEFAULT_NORM),
-                        help="Файл аннотаций нормы (.json или .csv)")
-    parser.add_argument("--patolog", default=str(DEFAULT_PATOLOG),
-                        help="Файл аннотаций патологии (.json или .csv)")
-    parser.add_argument("--images-dir", default=str(DEFAULT_IMAGES),
-                        help="Корневая папка с изображениями")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUT),
-                        help="Выходная директория YOLO датасета")
-    parser.add_argument("--val-split", type=float, default=0.2)
-    parser.add_argument("--seed",      type=int,   default=42)
+    parser.add_argument("--norm",       default=str(DEFAULT_NORM))
+    parser.add_argument("--patolog",    default=str(DEFAULT_PATOLOG))
+    parser.add_argument("--test",       default=str(DEFAULT_TEST))
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUT))
+    parser.add_argument("--val-split",  type=float, default=0.2)
+    parser.add_argument("--seed",       type=int,   default=42)
     args = parser.parse_args()
 
-    norm_path    = Path(args.norm)
-    patolog_path = Path(args.patolog)
-    images_dir   = Path(args.images_dir)
-    output_dir   = Path(args.output_dir)
+    output_dir = Path(args.output_dir)
 
-    # Загрузка
-    print(f"Норма:     {norm_path.name}")
-    norm = load_via(norm_path)
-    print(f"  {len(norm)} изображений, {sum(len(v) for v in norm.values())} точек")
+    all_data: dict[str, list] = {}
+    for label, path_str in [("norm", args.norm),
+                             ("patolog", args.patolog),
+                             ("test", args.test)]:
+        p = Path(path_str)
+        if not p.exists():
+            print(f"[WARN] файл не найден: {p}")
+            continue
+        data = load_via(p)
+        print(f"{label}: {p.name}  ->  {len(data)} изображений, "
+              f"{sum(len(v) for v in data.values())} точек")
+        # Проверка количества точек
+        for fname, pts in data.items():
+            if len(pts) != NUM_KEYPOINTS:
+                print(f"  [WARN] {fname}: {len(pts)} точек (ожидалось {NUM_KEYPOINTS})")
+        all_data.update(data)
 
-    print(f"Патология: {patolog_path.name}")
-    pat = load_via(patolog_path)
-    print(f"  {len(pat)} изображений, {sum(len(v) for v in pat.values())} точек")
+    print(f"\nВсего: {len(all_data)} изображений")
 
-    # Проверка количества точек
-    all_data = list(norm.items()) + list(pat.items())
-    for fname, pts in all_data:
-        if len(pts) != NUM_KEYPOINTS:
-            print(f"  [WARN] {fname}: {len(pts)} точек (ожидалось {NUM_KEYPOINTS})")
+    stats = convert_and_split(list(all_data.items()), output_dir,
+                               args.val_split, args.seed)
 
-    # Конвертация
-    print(f"\nКонвертация -> YOLO Pose (val={args.val_split*100:.0f}%, seed={args.seed}) ...")
-    stats = convert_and_split(all_data, images_dir, output_dir, args.val_split, args.seed)
-
-    print(f"\nРезультат:")
+    print("\nРезультат:")
     for split, (ok, skip) in stats.items():
         print(f"  {split:5s}: {ok} сконвертировано, {skip} пропущено")
-
-    print(f"\nСтруктура:")
-    for split in ("train", "val"):
-        print(f"  {output_dir / split / 'images'}")
-        print(f"  {output_dir / split / 'labels'}")
 
 
 if __name__ == "__main__":
