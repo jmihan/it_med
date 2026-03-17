@@ -1,11 +1,23 @@
 class MedicalAnalysisError(Exception):
-    """Базовый класс для ошибок платформы"""
+    """Базовый класс для ошибок платформы."""
     pass
+
 
 class ModelInferenceError(MedicalAnalysisError):
-    """TODO: Вызывать, если нейросеть упала с ошибкой или вернула мусор"""
+    """Ошибка при инференсе модели (загрузка весов, forward pass)."""
     pass
 
+
 class MissingKeypointsError(MedicalAnalysisError):
-    """TODO: Вызывать, если модель не нашла нужные для расчета углов кости/точки"""
+    """Модель не нашла достаточно ключевых точек для расчёта метрик."""
+    pass
+
+
+class PluginNotFoundError(MedicalAnalysisError):
+    """Запрошенный плагин не зарегистрирован."""
+    pass
+
+
+class ImageLoadError(MedicalAnalysisError):
+    """Ошибка загрузки или декодирования изображения."""
     pass

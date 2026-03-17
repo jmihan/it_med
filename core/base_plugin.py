@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 import numpy as np
 
 
@@ -71,6 +71,17 @@ class BaseMedicalPlugin(ABC):
             {layer_key: BGR numpy array} — изображение с отрисованным слоем
         """
         return {}
+
+    def generate_explanation(self, results: Dict) -> List[Dict]:
+        """
+        Генерация пошагового объяснения для студенческого режима.
+
+        Переопределите в подклассе для кастомных объяснений.
+
+        Returns:
+            Список шагов [{title, description, ...}]
+        """
+        return []
 
     def _load_config(self, path: str) -> dict:
         """Загрузка YAML-конфигурации плагина."""
