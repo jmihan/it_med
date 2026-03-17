@@ -62,16 +62,8 @@ def _parse_classification(raw: dict | None) -> ClassificationData | None:
 
 
 def _parse_metrics(raw: dict) -> MetricsData:
-    """Конвертация метрик."""
-    pathology = raw.get("pathology")
-    return MetricsData(
-        valid=raw.get("valid", False),
-        hilgenreiner_angle_left=raw.get("hilgenreiner_angle_left"),
-        hilgenreiner_angle_right=raw.get("hilgenreiner_angle_right"),
-        perkin_violation_left=raw.get("perkin_violation_left"),
-        perkin_violation_right=raw.get("perkin_violation_right"),
-        pathology=pathology,
-    )
+    """Конвертация метрик. Передаёт все поля плагина (extra="allow")."""
+    return MetricsData(**raw)
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
@@ -146,6 +138,7 @@ def analyze_single(
 def analyze_batch(
     files: list[UploadFile] = File(...),
     plugin: str = Form("hip_dysplasia"),
+    mode: str = Form("doctor"),
     include_images: bool = Form(False),
     image_format: str = Form("png"),
     _api_key: str = Depends(require_api_key),
@@ -156,6 +149,9 @@ def analyze_batch(
             status_code=400,
             detail=f"Слишком много файлов. Максимум: {MAX_BATCH_SIZE}",
         )
+
+    if mode not in ("doctor", "student"):
+        raise HTTPException(status_code=400, detail="mode должен быть 'doctor' или 'student'")
 
     pipeline = get_pipeline()
 
@@ -176,7 +172,7 @@ def analyze_batch(
             _validate_file(f)
             file_bytes = f.file.read()
             image = load_from_bytes(file_bytes, f.filename or "image.png")
-            raw = pipeline.run(image, plugin, mode="doctor")
+            raw = pipeline.run(image, plugin, mode=mode)
 
             pathology = raw.get("pathology_detected", False)
             csv_lines.append(f"{image_id},{1 if pathology else 0}")
@@ -189,11 +185,11 @@ def analyze_batch(
                 metrics=_parse_metrics(raw.get("metrics", {})),
             ))
         except Exception as e:
-            csv_lines.append(f"{image_id},0")
+            csv_lines.append(f"{image_id},-1")
             results_list.append(BatchResultItem(
                 image_id=image_id,
                 filename=f.filename or "unknown",
-                pathology_detected=False,
+                pathology_detected=None,
                 error=str(e),
             ))
 

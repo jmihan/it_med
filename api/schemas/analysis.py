@@ -2,8 +2,8 @@
 Pydantic-модели запросов и ответов для эндпоинтов анализа.
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Optional
 
 
 class KeypointData(BaseModel):
@@ -21,11 +21,15 @@ class ClassificationData(BaseModel):
 
 
 class MetricsData(BaseModel):
+    """
+    Расширяемая модель метрик.
+
+    Общие поля: valid, pathology.
+    Плагин-специфичные поля передаются через extra="allow".
+    """
+    model_config = ConfigDict(extra="allow")
+
     valid: bool = False
-    hilgenreiner_angle_left: Optional[float] = None
-    hilgenreiner_angle_right: Optional[float] = None
-    perkin_violation_left: Optional[bool] = None
-    perkin_violation_right: Optional[bool] = None
     pathology: Optional[dict] = None
 
 
@@ -51,7 +55,7 @@ class AnalysisResponse(BaseModel):
 class BatchResultItem(BaseModel):
     image_id: str
     filename: str
-    pathology_detected: bool
+    pathology_detected: Optional[bool] = None
     classification: Optional[ClassificationData] = None
     metrics: Optional[MetricsData] = None
     error: Optional[str] = None
