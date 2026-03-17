@@ -280,15 +280,14 @@ app/
 ├── models/
 │   ├── base_model.py           # BaseMLModel
 │   ├── classifier.py           # ResNetClassifier (ResNet18/50)
-│   ├── keypoint_detector.py    # KeypointDetector (YOLO Pose)
-│   └── segmentator.py          # ImageSegmentator (заглушка)
+│   └── keypoint_detector.py    # KeypointDetector (YOLO Pose)
 │
 ├── training/
 │   ├── trainer.py              # MedicalTrainer
 │   ├── dataset.py              # MedicalImageDataset
 │   └── augmentations.py        # Albumentations pipeline
 │
-├── visualizating/
+├── visualization/
 │   ├── explainers.py           # ModelExplainer (GradCAM / GradCAM++ / EigenCAM)
 │   └── drawing.py              # ImageAnnotator — отрисовка точек и линий
 │

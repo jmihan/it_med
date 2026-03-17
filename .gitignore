@@ -22,6 +22,9 @@ weights/
 *.pth
 *.onnx
 
+# Training outputs (YOLO)
+runs/
+
 # Logs and temp
 *.log
 *.tmp
