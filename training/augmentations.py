@@ -31,6 +31,12 @@ def get_training_augmentations(image_size: int = 224) -> A.Compose:
             p=0.3,
         ),
 
+        # Нормализация локального контраста — компенсирует разные рентген-аппараты
+        A.CLAHE(clip_limit=2.0, tile_grid_size=(8, 8), p=0.4),
+
+        # Гамма-коррекция — имитирует разную дозу/экспозицию рентгена
+        A.RandomGamma(gamma_limit=(80, 120), p=0.4),
+
         # Яркость и контраст — компенсируем разное оборудование и настройки экспозиции
         A.RandomBrightnessContrast(
             brightness_limit=0.15,
@@ -43,6 +49,18 @@ def get_training_augmentations(image_size: int = 224) -> A.Compose:
 
         # Шум — имитация артефактов сенсора
         A.GaussNoise(var_limit=(5.0, 20.0), p=0.2),
+
+        # Резкость — некоторые аппараты применяют постобработку, другие нет
+        A.Sharpen(alpha=(0.1, 0.3), lightness=(0.8, 1.2), p=0.2),
+
+        # Закрытие случайных областей — регуляризация при малом датасете
+        A.CoarseDropout(
+            max_holes=4,
+            max_height=20,
+            max_width=20,
+            fill_value=0,
+            p=0.2,
+        ),
 
         # Нормализация ImageNet (модель предобучена на ImageNet)
         A.Normalize(
