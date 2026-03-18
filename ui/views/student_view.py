@@ -83,7 +83,38 @@ def render(results: Dict[str, Any]):
                             caption=f"Визуализация: {title}"
                         )
 
-    # --- Общее заключение ---
+    # --- Сравнение вердиктов ---
+    st.divider()
+    st.subheader("Сравнение вердиктов")
+    col_geo, col_nn = st.columns(2)
+
+    with col_geo:
+        st.markdown("**Геометрический анализ**")
+        geo_path = results.get("geometric_pathology")
+        geo_conf = results.get("geometric_confidence")
+        if geo_path is None:
+            st.warning("Недостаточно ключевых точек")
+        elif geo_path:
+            conf_str = f" ({geo_conf:.0%})" if geo_conf is not None else ""
+            st.error(f"⚠️ Патология{conf_str}")
+        else:
+            conf_str = f" ({geo_conf:.0%})" if geo_conf is not None else ""
+            st.success(f"✅ Норма{conf_str}")
+
+    with col_nn:
+        st.markdown("**ResNet-классификатор**")
+        nn_path = results.get("resnet_pathology")
+        nn_conf = results.get("resnet_confidence")
+        if nn_path is None:
+            st.info("Классификатор не подключён")
+        elif nn_path:
+            conf_str = f" ({nn_conf:.0%})" if nn_conf is not None else ""
+            st.error(f"⚠️ Патология{conf_str}")
+        else:
+            conf_str = f" ({nn_conf:.0%})" if nn_conf is not None else ""
+            st.success(f"✅ Норма{conf_str}")
+
+    # --- Итоговое заключение системы ---
     pathology = results.get("pathology_detected", False)
     st.divider()
     if pathology:

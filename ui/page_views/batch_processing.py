@@ -1,21 +1,64 @@
 """
 Страница пакетной обработки.
-Обработка папки с изображениями → submission.csv + размеченные скриншоты.
+Обработка папки с изображениями → submission.csv + архив с результатами анализа.
 """
 
-import os
-import io
 import csv
+import io
+import os
+import zipfile
+
 import cv2
-import numpy as np
 import streamlit as st
-from typing import List
 
 from core.pipeline import AnalysisPipeline
 from core.registry import PluginRegistry
-from core.image_io import load_image
 import ui.state as state
 from ui.components.image_viewer import _to_rgb
+from ui.components.report_export import generate_text_report
+
+
+def _build_archive(archive_data: dict, results_list: list) -> bytes:
+    """
+    Формирует ZIP-архив с результатами анализа всех снимков.
+
+    Структура архива:
+      submission.csv
+      reports/{id}_report.txt
+      reports/{id}_annotated.png
+      reports/{id}_gradcam.png   (если доступен GradCAM)
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        # submission.csv
+        csv_buf = io.StringIO()
+        writer = csv.writer(csv_buf)
+        writer.writerow(["id", "class"])
+        for row in results_list:
+            if row["class"] >= 0:
+                writer.writerow([row["id"], row["class"]])
+        zf.writestr("submission.csv", csv_buf.getvalue())
+
+        # По каждому снимку
+        for image_id, data in archive_data.items():
+            # Текстовый отчёт
+            report_text = generate_text_report(data)
+            zf.writestr(f"reports/{image_id}_report.txt", report_text)
+
+            # Размеченный снимок (геометрическая разметка)
+            annotated = data.get("annotated_image")
+            if annotated is not None:
+                _, png = cv2.imencode(".png", annotated)
+                zf.writestr(f"reports/{image_id}_annotated.png", png.tobytes())
+
+            # Тепловая карта GradCAM
+            heatmap = data.get("heatmap_overlay")
+            if heatmap is not None:
+                _, png = cv2.imencode(".png", heatmap)
+                zf.writestr(f"reports/{image_id}_gradcam.png", png.tobytes())
+
+    buf.seek(0)
+    return buf.read()
 
 
 def render(pipeline: AnalysisPipeline):
@@ -37,7 +80,7 @@ def render(pipeline: AnalysisPipeline):
         help="Укажите путь к папке, содержащей снимки для анализа",
     )
 
-    save_annotated = st.checkbox("Сохранять размеченные снимки", value=True)
+    save_annotated = st.checkbox("Показывать размеченные снимки в галерее", value=True)
 
     col1, col2 = st.columns([1, 3])
     with col1:
@@ -48,7 +91,8 @@ def render(pipeline: AnalysisPipeline):
         ### Формат результата
 
         - **submission.csv** — файл вида `id,class` (0 = норма, 1 = патология)
-        - **Размеченные снимки** — изображения с наложенной разметкой ИИ (опционально)
+        - **Архив результатов (.zip)** — для каждого снимка: текстовый отчёт,
+          размеченное изображение и тепловая карта GradCAM (если классификатор загружен)
         """)
         return
 
@@ -69,22 +113,24 @@ def render(pipeline: AnalysisPipeline):
 
     st.info(f"Найдено {len(image_files)} изображений")
 
-    # --- Обработка ---
+    # --- Обработка (student mode — нужен GradCAM для архива) ---
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    results_list = []
-    annotated_images = {}
+    results_list = []   # для таблицы и CSV
+    archive_data = {}   # image_id → данные для архива (без тяжёлых layer_images)
+    annotated_images = {}  # для галереи
 
-    for i, (image_id, result) in enumerate(pipeline.run_batch(image_files, plugin_name)):
+    for i, (image_id, result) in enumerate(
+        pipeline.run_batch(image_files, plugin_name, mode='student')
+    ):
         progress = (i + 1) / len(image_files)
         progress_bar.progress(progress)
         status_text.text(f"Обработано: {i + 1}/{len(image_files)} — {image_id}")
 
-        # Извлечение данных для CSV
         error_msg = ""
         if "error" in result:
-            pathology_class = -1  # Ошибка
+            pathology_class = -1
             error_msg = result["error"]
         else:
             pathology_class = 1 if result.get("pathology_detected", False) else 0
@@ -101,7 +147,21 @@ def render(pipeline: AnalysisPipeline):
             "error": error_msg,
         })
 
-        # Сохранение размеченного снимка
+        if "error" not in result:
+            # Сохраняем только нужное для архива (экономим память)
+            archive_data[image_id] = {
+                "plugin_metadata":    result.get("plugin_metadata"),
+                "metrics":            result.get("metrics"),
+                "classification":     result.get("classification"),
+                "pathology_detected": result.get("pathology_detected"),
+                "geometric_pathology":  result.get("geometric_pathology"),
+                "geometric_confidence": result.get("geometric_confidence"),
+                "resnet_pathology":   result.get("resnet_pathology"),
+                "resnet_confidence":  result.get("resnet_confidence"),
+                "annotated_image":    result.get("annotated_image"),
+                "heatmap_overlay":    result.get("heatmap_overlay"),
+            }
+
         if save_annotated and "annotated_image" in result:
             annotated_images[image_id] = result["annotated_image"]
 
@@ -114,10 +174,8 @@ def render(pipeline: AnalysisPipeline):
     st.subheader("Результаты")
     import pandas as pd
     df = pd.DataFrame(results_list)
-    display_cols = ["id", "class", "confidence"]
-    st.dataframe(df[display_cols], use_container_width=True)
+    st.dataframe(df[["id", "class", "confidence"]], use_container_width=True)
 
-    # Детали ошибок
     errors = [r for r in results_list if r["class"] == -1]
     if errors:
         with st.expander(f"⚠️ Детали ошибок ({len(errors)})"):
@@ -138,21 +196,37 @@ def render(pipeline: AnalysisPipeline):
 
     st.divider()
 
-    # --- Скачивание submission.csv ---
-    csv_buffer = io.StringIO()
-    writer = csv.writer(csv_buffer)
+    # --- Скачивание ---
+    dl_col1, dl_col2 = st.columns(2)
+
+    # submission.csv
+    csv_buf = io.StringIO()
+    writer = csv.writer(csv_buf)
     writer.writerow(["id", "class"])
     for r in results_list:
-        if r["class"] >= 0:  # Пропускаем ошибки
+        if r["class"] >= 0:
             writer.writerow([r["id"], r["class"]])
 
-    st.download_button(
-        "📥 Скачать submission.csv",
-        data=csv_buffer.getvalue(),
-        file_name="submission.csv",
-        mime="text/csv",
-        type="primary",
-    )
+    with dl_col1:
+        st.download_button(
+            "📥 Скачать submission.csv",
+            data=csv_buf.getvalue(),
+            file_name="submission.csv",
+            mime="text/csv",
+            type="primary",
+        )
+
+    # Архив результатов
+    with dl_col2:
+        if archive_data:
+            archive_bytes = _build_archive(archive_data, results_list)
+            st.download_button(
+                "📦 Скачать архив результатов (.zip)",
+                data=archive_bytes,
+                file_name="results_archive.zip",
+                mime="application/zip",
+                type="primary",
+            )
 
     # --- Галерея размеченных снимков ---
     if annotated_images:
@@ -168,7 +242,7 @@ def render(pipeline: AnalysisPipeline):
                 if idx >= len(items):
                     break
                 img_id, img = items[idx]
-                result = results_list[idx]
-                label = "⚠️ Патология" if result["class"] == 1 else "✅ Норма"
+                result_row = results_list[idx]
+                label = "⚠️ Патология" if result_row["class"] == 1 else "✅ Норма"
                 with col:
                     st.image(_to_rgb(img), caption=f"{img_id} — {label}", use_container_width=True)

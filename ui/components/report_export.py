@@ -1,5 +1,5 @@
 """
-Компонент экспорта отчётов (PDF и CSV).
+Компонент экспорта отчётов.
 """
 
 import io
@@ -9,41 +9,16 @@ import streamlit as st
 from typing import Dict, Any
 
 
-def render_download(results: Dict[str, Any]):
-    """Кнопки скачивания отчёта."""
-    st.subheader("Экспорт результатов")
-
-    col1, col2 = st.columns(2)
-
-    # --- Текстовый отчёт ---
-    with col1:
-        report_text = _generate_text_report(results)
-        st.download_button(
-            "📄 Скачать отчёт (TXT)",
-            data=report_text,
-            file_name="medical_report.txt",
-            mime="text/plain",
-        )
-
-    # --- Размеченный снимок ---
-    with col2:
-        annotated = results.get("annotated_image")
-        if annotated is not None:
-            _, buf = cv2.imencode(".png", annotated)
-            st.download_button(
-                "🖼️ Скачать снимок с разметкой",
-                data=buf.tobytes(),
-                file_name="annotated_scan.png",
-                mime="image/png",
-            )
-
-
-def _generate_text_report(results: Dict[str, Any]) -> str:
-    """Генерация текстового отчёта."""
+def generate_text_report(results: Dict[str, Any]) -> str:
+    """Генерация текстового отчёта с геометрическим и нейросетевым вердиктами."""
     metadata = results.get("plugin_metadata", {})
     metrics = results.get("metrics", {})
     classification = results.get("classification")
     pathology = results.get("pathology_detected", False)
+    geo_pathology = results.get("geometric_pathology")
+    geo_confidence = results.get("geometric_confidence")
+    resnet_pathology = results.get("resnet_pathology")
+    resnet_confidence = results.get("resnet_confidence")
 
     lines = []
     lines.append("=" * 60)
@@ -62,7 +37,6 @@ def _generate_text_report(results: Dict[str, Any]) -> str:
         if value is None:
             continue
 
-        # h_distance_*/d_distance_* — извлечь числовое значение из вложенного dict
         if isinstance(value, dict):
             if "h_mm" in value:
                 value = value.get("h_mm") or value.get("h_px")
@@ -89,15 +63,30 @@ def _generate_text_report(results: Dict[str, Any]) -> str:
 
     lines.append("")
 
-    # Классификация
-    if classification:
-        lines.append("НЕЙРОСЕТЕВАЯ КЛАССИФИКАЦИЯ (ResNet):")
-        lines.append("-" * 40)
+    # Геометрический вердикт
+    lines.append("ГЕОМЕТРИЧЕСКИЙ ВЕРДИКТ:")
+    lines.append("-" * 40)
+    if geo_pathology is None:
+        lines.append("  Вердикт: Недостаточно ключевых точек для анализа")
+    elif geo_pathology:
+        conf_str = f" (уверенность: {geo_confidence:.0%})" if geo_confidence is not None else ""
+        lines.append(f"  Вердикт: Патология{conf_str}")
+    else:
+        conf_str = f" (уверенность: {geo_confidence:.0%})" if geo_confidence is not None else ""
+        lines.append(f"  Вердикт: Норма{conf_str}")
+    lines.append("")
+
+    # Нейросетевая классификация
+    lines.append("НЕЙРОСЕТЕВАЯ КЛАССИФИКАЦИЯ (ResNet):")
+    lines.append("-" * 40)
+    if resnet_pathology is None:
+        lines.append("  Классификатор не подключён")
+    elif classification:
         lines.append(f"  Предсказание: {classification.get('class_name', '—')}")
         lines.append(f"  Уверенность: {classification.get('confidence', 0):.1%}")
         lines.append(f"  P(Норма): {classification.get('prob_normal', 0):.1%}")
         lines.append(f"  P(Патология): {classification.get('prob_pathology', 0):.1%}")
-        lines.append("")
+    lines.append("")
 
     # Заключение
     lines.append("ЗАКЛЮЧЕНИЕ:")
@@ -116,3 +105,30 @@ def _generate_text_report(results: Dict[str, Any]) -> str:
     lines.append("=" * 60)
 
     return "\n".join(lines)
+
+
+def render_download(results: Dict[str, Any]):
+    """Кнопки скачивания отчёта."""
+    st.subheader("Экспорт результатов")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        report_text = generate_text_report(results)
+        st.download_button(
+            "📄 Скачать отчёт (TXT)",
+            data=report_text,
+            file_name="medical_report.txt",
+            mime="text/plain",
+        )
+
+    with col2:
+        annotated = results.get("annotated_image")
+        if annotated is not None:
+            _, buf = cv2.imencode(".png", annotated)
+            st.download_button(
+                "🖼️ Скачать снимок с разметкой",
+                data=buf.tobytes(),
+                file_name="annotated_scan.png",
+                mime="image/png",
+            )

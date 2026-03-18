@@ -56,6 +56,11 @@ def render_layered(
         if layer_img is None:
             continue
 
+        # Слои с отличным размером (например, GradCAM на ROI-кропе) не совместимы
+        # с послойным композитором — они отображаются отдельно в expandable-шагах
+        if layer_img.shape[:2] != original.shape[:2]:
+            continue
+
         # Маска: где слой отличается от оригинала (там нарисована графика)
         diff = cv2.absdiff(layer_img, original)
         mask = np.any(diff > 5, axis=2)  # Порог для шума
