@@ -28,9 +28,7 @@ def load_image(path: str) -> np.ndarray:
             if img_max > img_min:
                 img = (img - img_min) * (255.0 / (img_max - img_min))
             img = img.astype(np.uint8)
-            if img.ndim == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            return img
+            return _normalize_channels(img)
         except Exception:
             pass  # Пробуем через OpenCV
 
@@ -63,9 +61,7 @@ def load_from_upload(uploaded_file) -> np.ndarray:
             if img_max > img_min:
                 img = (img - img_min) * (255.0 / (img_max - img_min))
             img = img.astype(np.uint8)
-            if img.ndim == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            return img
+            return _normalize_channels(img)
         except Exception:
             pass
 
@@ -98,9 +94,7 @@ def load_from_bytes(data: bytes, filename: str) -> np.ndarray:
             if img_max > img_min:
                 img = (img - img_min) * (255.0 / (img_max - img_min))
             img = img.astype(np.uint8)
-            if img.ndim == 2:
-                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-            return img
+            return _normalize_channels(img)
         except Exception:
             pass
 
@@ -115,6 +109,8 @@ def _normalize_channels(img: np.ndarray) -> np.ndarray:
     """Приведение к 3-канальному BGR."""
     if img.ndim == 2:
         return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    if img.shape[2] == 1:
+        return cv2.cvtColor(img[:, :, 0], cv2.COLOR_GRAY2BGR)
     if img.shape[2] == 4:
         return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
     return img

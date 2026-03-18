@@ -132,9 +132,12 @@ class AnalysisPipeline:
             # Извлечение ID из имени файла
             filename = os.path.basename(path)
             image_id = os.path.splitext(filename)[0]
-            # Берём первый сегмент до '_' как ID (формат хакатона)
-            if '_' in image_id:
-                image_id = image_id.split('_')[0]
+            # Убираем ведущие подчёркивания, затем берём первый сегмент до '_'
+            stripped = image_id.lstrip('_')
+            if '_' in stripped:
+                image_id = stripped.split('_')[0]
+            elif stripped:
+                image_id = stripped
 
             try:
                 image = load_image(path)
@@ -147,5 +150,5 @@ class AnalysisPipeline:
                     "error": str(e),
                     "image_id": image_id,
                     "source_path": path,
-                    "pathology_detected": False,
+                    "pathology_detected": None,
                 }
