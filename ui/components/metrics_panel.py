@@ -44,6 +44,15 @@ def render(metrics: Dict[str, Any], metric_definitions: List[Dict], pathology_de
                 # Попробовать вложенные ключи (pathology.left.is_pathology)
                 value = _get_nested(metrics, key)
 
+            # h_distance_*/d_distance_* — извлечь числовое значение из вложенного dict
+            if isinstance(value, dict):
+                if "h_mm" in value:
+                    value = value.get("h_mm") or value.get("h_px")
+                elif "d_mm" in value:
+                    value = value.get("d_mm") or value.get("d_px")
+                else:
+                    value = None
+
             with col:
                 if metric_type == "bool":
                     _render_bool_metric(label, value)

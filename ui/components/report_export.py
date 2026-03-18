@@ -59,6 +59,18 @@ def _generate_text_report(results: Dict[str, Any]) -> str:
         label = defn["label"]
         unit = defn.get("unit", "")
         value = metrics.get(key)
+        if value is None:
+            continue
+
+        # h_distance_*/d_distance_* — извлечь числовое значение из вложенного dict
+        if isinstance(value, dict):
+            if "h_mm" in value:
+                value = value.get("h_mm") or value.get("h_px")
+            elif "d_mm" in value:
+                value = value.get("d_mm") or value.get("d_px")
+            else:
+                continue
+
         if value is not None:
             if defn.get("type") == "bool":
                 val_str = "Да" if value else "Нет"

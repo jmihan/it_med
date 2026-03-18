@@ -19,7 +19,7 @@ from core.registry import register_all_plugins
 
 import ui.state as state
 from ui.components import sidebar
-from ui.pages import single_analysis, batch_processing
+from ui.page_views import single_analysis, batch_processing
 
 
 @st.cache_resource

@@ -82,8 +82,10 @@ def render(pipeline: AnalysisPipeline):
         status_text.text(f"Обработано: {i + 1}/{len(image_files)} — {image_id}")
 
         # Извлечение данных для CSV
+        error_msg = ""
         if "error" in result:
             pathology_class = -1  # Ошибка
+            error_msg = result["error"]
         else:
             pathology_class = 1 if result.get("pathology_detected", False) else 0
 
@@ -95,7 +97,8 @@ def render(pipeline: AnalysisPipeline):
         results_list.append({
             "id": image_id,
             "class": pathology_class,
-            "confidence": confidence,
+            "confidence": round(confidence, 3),
+            "error": error_msg,
         })
 
         # Сохранение размеченного снимка
@@ -111,7 +114,15 @@ def render(pipeline: AnalysisPipeline):
     st.subheader("Результаты")
     import pandas as pd
     df = pd.DataFrame(results_list)
-    st.dataframe(df, use_container_width=True)
+    display_cols = ["id", "class", "confidence"]
+    st.dataframe(df[display_cols], use_container_width=True)
+
+    # Детали ошибок
+    errors = [r for r in results_list if r["class"] == -1]
+    if errors:
+        with st.expander(f"⚠️ Детали ошибок ({len(errors)})"):
+            for r in errors:
+                st.text(f"{r['id']}: {r['error']}")
 
     # --- Статистика ---
     total = len(results_list)
