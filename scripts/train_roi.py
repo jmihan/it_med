@@ -47,6 +47,12 @@ def main():
     parser.add_argument("--name",     default="hip_roi_v1")
     parser.add_argument("--device",   default=None)
     parser.add_argument("--resume",   action="store_true")
+    parser.add_argument("--cfg", default=None,
+                        help="Путь к YAML с гиперпараметрами из tune (best_hyperparameters.yaml)")
+    parser.add_argument("--tune", action="store_true",
+                        help="Запустить гиперпараметрическую настройку вместо обучения")
+    parser.add_argument("--tune-iterations", type=int, default=100,
+                        help="Количество итераций tune (default: 100)")
     args = parser.parse_args()
 
     if args.device is None:
@@ -71,17 +77,44 @@ def main():
 
     dataset_yaml = str(PROJECT_ROOT / "data" / "roi" / "dataset.yaml")
 
+    # Гиперпараметрическая настройка
+    if args.tune:
+        print(f"\nЗапуск tune: {args.tune_iterations} итераций, imgsz={args.imgsz}")
+        print(f"Устройство: {args.device}")
+        print("=" * 60)
+        model.tune(
+            data=dataset_yaml,
+            epochs=args.epochs,
+            iterations=args.tune_iterations,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            device=args.device,
+            project=str(PROJECT_ROOT / "runs" / "roi_tune"),
+            name=args.name,
+            exist_ok=True,
+        )
+        print("\nTune завершён!")
+        print(f"Результаты: {PROJECT_ROOT / 'runs' / 'roi_tune' / args.name}")
+        return
+
     print(f"\nНачало обучения ROI: {args.epochs} эпох, batch={args.batch}, imgsz={args.imgsz}")
     print(f"Устройство: {args.device}")
     print("=" * 60)
 
-    model.train(
+    train_kwargs = dict(
         data=dataset_yaml,
         epochs=args.epochs,
         imgsz=args.imgsz,
         batch=args.batch,
         patience=args.patience,
         device=args.device,
+    )
+    if args.cfg:
+        train_kwargs["cfg"] = args.cfg
+        print(f"Гиперпараметры из: {args.cfg}")
+
+    model.train(
+        **train_kwargs,
 
         # Аугментации (без флипов — анатомическая ориентация важна)
         fliplr=0.0,

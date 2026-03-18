@@ -69,6 +69,8 @@ def main():
                         help="Имя эксперимента (default: hip_pose_v1)")
     parser.add_argument("--resume", action="store_true",
                         help="Возобновить обучение с последнего чекпоинта")
+    parser.add_argument("--cfg", default=None,
+                        help="Путь к YAML с гиперпараметрами из tune (best_hyperparameters.yaml)")
     parser.add_argument("--tune", action="store_true",
                         help="Запустить гиперпараметрическую настройку вместо обучения")
     parser.add_argument("--tune-iterations", type=int, default=300,
@@ -129,13 +131,20 @@ def main():
     print(f"Устройство: {args.device}")
     print("=" * 60)
 
-    results = model.train(
+    train_kwargs = dict(
         data=dataset_yaml,
         epochs=args.epochs,
         imgsz=args.imgsz,
         batch=args.batch,
         patience=args.patience,
         device=args.device,
+    )
+    if args.cfg:
+        train_kwargs["cfg"] = args.cfg
+        print(f"Гиперпараметры из: {args.cfg}")
+
+    model.train(
+        **train_kwargs,
 
         # Аугментации: БЕЗ флипов — сохранение анатомической L/R ориентации
         fliplr=0.0,
