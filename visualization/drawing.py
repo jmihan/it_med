@@ -11,7 +11,68 @@
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, Tuple, Optional
+
+# Загрузка шрифта с поддержкой кириллицы (один раз)
+_FONT_CACHE: dict = {}
+
+
+def _get_font(size: int = 14) -> ImageFont.FreeTypeFont:
+    """Получить шрифт с кириллицей (кэшируется по размеру)."""
+    if size in _FONT_CACHE:
+        return _FONT_CACHE[size]
+
+    import platform
+    font_paths = []
+    system = platform.system()
+    if system == "Windows":
+        font_paths = ["C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/tahoma.ttf"]
+    elif system == "Darwin":
+        font_paths = ["/System/Library/Fonts/Helvetica.ttc", "/Library/Fonts/Arial.ttf"]
+    else:  # Linux
+        font_paths = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+
+    for fp in font_paths:
+        try:
+            font = ImageFont.truetype(fp, size)
+            _FONT_CACHE[size] = font
+            return font
+        except (IOError, OSError):
+            continue
+
+    font = ImageFont.load_default()
+    _FONT_CACHE[size] = font
+    return font
+
+
+def _put_text(img: np.ndarray, text: str, position: Tuple[int, int],
+              color_bgr: Tuple[int, int, int], font_size: int = 14) -> np.ndarray:
+    """
+    Рисует текст с поддержкой кириллицы через PIL.
+
+    Args:
+        img: BGR numpy array (будет модифицирован in-place)
+        text: Текст для отрисовки
+        position: (x, y) — левый верхний угол текста
+        color_bgr: Цвет в BGR формате
+        font_size: Размер шрифта
+    Returns:
+        Модифицированный img
+    """
+    # BGR → RGB для PIL
+    color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])
+    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(pil_img)
+    font = _get_font(font_size)
+    draw.text(position, text, fill=color_rgb, font=font)
+    result = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    np.copyto(img, result)
+    return img
 
 
 class ImageAnnotator:
@@ -27,6 +88,8 @@ class ImageAnnotator:
         "R_FHC": (255, 0, 0),
         "L_FMM": (0, 165, 255),   # Оранжевый — метафизы
         "R_FMM": (0, 165, 255),
+        "L_FMP": (0, 255, 255),   # Жёлто-зелёный — верхний край метафиза
+        "R_FMP": (0, 255, 255),
     }
 
     # Русские подписи для точек
@@ -39,6 +102,8 @@ class ImageAnnotator:
         "R_FHC": "Головка П",
         "L_FMM": "Метафиз Л",
         "R_FMM": "Метафиз П",
+        "L_FMP": "Верх метафиза Л",
+        "R_FMP": "Верх метафиза П",
     }
 
     @staticmethod
@@ -72,8 +137,7 @@ class ImageAnnotator:
             if show_labels:
                 label = ImageAnnotator.KEYPOINT_LABELS.get(name, name)
                 label_text = f"{label} ({conf:.0%})"
-                cv2.putText(img, label_text, (pt[0] + radius + 3, pt[1] - 3),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+                _put_text(img, label_text, (pt[0] + radius + 3, pt[1] - 10), color, font_size=13)
 
         return img
 
@@ -114,8 +178,7 @@ class ImageAnnotator:
 
         # Подпись
         mid = ((p1 + p2) / 2).astype(int)
-        cv2.putText(img, "Hilgenreiner", (mid[0] - 40, mid[1] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        _put_text(img, "Хильгенрейнер", (mid[0] - 40, mid[1] - 18), color, font_size=14)
 
         return img
 
@@ -184,8 +247,8 @@ class ImageAnnotator:
                         0, -end_angle, -start_angle, color, 1, cv2.LINE_AA)
 
             # Подпись с углом
-            label = f"{angle:.1f}{chr(176)}"
-            status = "PATHO" if is_pathology else "NORM"
+            label = f"{angle:.1f}\u00b0"
+            status = "ПАТОЛ" if is_pathology else "НОРМА"
             label_full = f"{label} [{status}]"
 
             # Позиция подписи — по дуге
@@ -193,8 +256,7 @@ class ImageAnnotator:
             label_x = int(trc[0] + (arc_radius + 15) * np.cos(mid_angle))
             label_y = int(trc[1] - (arc_radius + 15) * np.sin(mid_angle))
 
-            cv2.putText(img, label_full, (label_x, label_y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+            _put_text(img, label_full, (label_x, label_y), color, font_size=14)
 
         return img
 
@@ -239,8 +301,154 @@ class ImageAnnotator:
                      (int(p2[0]), int(p2[1])),
                      color, thickness, cv2.LINE_AA)
 
-            cv2.putText(img, "Perkin", (int(ace[0]) + 5, int(ace[1]) - 15),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
+            _put_text(img, "Перкин", (int(ace[0]) + 5, int(ace[1]) - 20), color, font_size=12)
+
+        return img
+
+    @staticmethod
+    def draw_trc_distance(image: np.ndarray, keypoints: Dict, metrics: Dict,
+                          color: Tuple = (255, 200, 0),
+                          thickness: int = 1) -> np.ndarray:
+        """
+        Отрисовка расстояния между L_TRC и R_TRC с подписью в мм.
+
+        Args:
+            image: Изображение BGR
+            keypoints: dict {имя: (x, y, conf)}
+            metrics: dict из calculate_all_metrics() (содержит trc_distance_mm)
+            color: Цвет линии (BGR)
+        """
+        img = image.copy()
+
+        l_trc = keypoints.get("L_TRC")
+        r_trc = keypoints.get("R_TRC")
+        if l_trc is None or r_trc is None:
+            return img
+        if l_trc[2] < 0.3 or r_trc[2] < 0.3:
+            return img
+
+        pt1 = (int(l_trc[0]), int(l_trc[1]))
+        pt2 = (int(r_trc[0]), int(r_trc[1]))
+
+        # Пунктирная линия (через отступы)
+        cv2.line(img, pt1, pt2, color, thickness, cv2.LINE_AA)
+
+        # Подпись расстояния
+        mid_x = (pt1[0] + pt2[0]) // 2
+        mid_y = (pt1[1] + pt2[1]) // 2
+
+        dist_mm = metrics.get("trc_distance_mm")
+        dist_px = metrics.get("trc_distance_px")
+        if dist_mm is not None:
+            label = f"{dist_mm:.1f} мм"
+        elif dist_px is not None:
+            label = f"{dist_px:.0f} px"
+        else:
+            return img
+
+        _put_text(img, label, (mid_x - 20, mid_y + 5), color, font_size=13)
+
+        return img
+
+    @staticmethod
+    def draw_h_d_distances(image: np.ndarray, keypoints: Dict, metrics: Dict,
+                           color_normal: Tuple = (0, 255, 0),
+                           color_abnormal: Tuple = (0, 0, 255),
+                           thickness: int = 1) -> np.ndarray:
+        """
+        Отрисовка расстояний h и d по Хильгенрейнеру.
+
+        h — перпендикуляр от линии Хильгенрейнера до метафиза (FMM).
+        d — проекция от TRC до FMM вдоль линии Хильгенрейнера.
+
+        Args:
+            image: Изображение BGR
+            keypoints: dict {имя: (x, y, conf)}
+            metrics: dict из calculate_all_metrics()
+            color_normal: Цвет для нормы
+            color_abnormal: Цвет для отклонения
+        """
+        img = image.copy()
+
+        l_trc = keypoints.get("L_TRC")
+        r_trc = keypoints.get("R_TRC")
+        if l_trc is None or r_trc is None:
+            return img
+        if l_trc[2] < 0.3 or r_trc[2] < 0.3:
+            return img
+
+        # Базис линии Хильгенрейнера
+        l_pt = np.array(l_trc[:2])
+        r_pt = np.array(r_trc[:2])
+        h_vec = r_pt - l_pt
+        h_len = np.linalg.norm(h_vec) + 1e-8
+        h_norm = h_vec / h_len
+        perp_norm = np.array([h_norm[1], -h_norm[0]])
+        if perp_norm[1] < 0:
+            perp_norm = -perp_norm
+
+        for side in ["left", "right"]:
+            prefix = "L" if side == "left" else "R"
+            # Приоритет: FMP (верхний край метафиза) → FHC → FMM
+            ref = None
+            for suffix in ["FMP", "FHC", "FMM"]:
+                pt = keypoints.get(f"{prefix}_{suffix}")
+                if pt is not None and pt[2] > 0.3:
+                    ref = pt
+                    break
+            if ref is None:
+                continue
+
+            ref_pt = np.array(ref[:2])
+            trc_pt = l_pt if side == "left" else r_pt
+
+            vec_to_ref = ref_pt - trc_pt
+            d_proj = np.dot(vec_to_ref, h_norm)
+            h_proj = np.dot(vec_to_ref, perp_norm)
+
+            # Точка проекции на линию Хильгенрейнера
+            proj_on_line = trc_pt + d_proj * h_norm
+
+            # --- Рисуем h (вертикальная линия: проекция → ref point) ---
+            h_data = metrics.get(f"h_distance_{side}", {})
+            h_is_normal = h_data.get("is_normal")
+            h_color = color_normal if h_is_normal is not False else color_abnormal
+
+            p_line = (int(proj_on_line[0]), int(proj_on_line[1]))
+            p_ref = (int(ref_pt[0]), int(ref_pt[1]))
+            cv2.line(img, p_line, p_ref, h_color, thickness, cv2.LINE_AA)
+
+            # Подпись h
+            h_mm = h_data.get("h_mm")
+            h_px = h_data.get("h_px")
+            if h_mm is not None:
+                h_label = f"h={h_mm:.1f}мм"
+            elif h_px is not None:
+                h_label = f"h={h_px:.0f}px"
+            else:
+                h_label = "h=?"
+            mid_h = ((p_line[0] + p_ref[0]) // 2 + 5, (p_line[1] + p_ref[1]) // 2)
+            _put_text(img, h_label, mid_h, h_color, font_size=12)
+
+            # --- Рисуем d (горизонтальная линия: TRC → проекция) ---
+            d_data = metrics.get(f"d_distance_{side}", {})
+            d_is_normal = d_data.get("is_normal")
+            d_color = color_normal if d_is_normal is not False else color_abnormal
+
+            p_trc = (int(trc_pt[0]), int(trc_pt[1]))
+            cv2.line(img, p_trc, p_line, d_color, thickness, cv2.LINE_AA)
+
+            # Подпись d
+            d_mm = d_data.get("d_mm")
+            d_px = d_data.get("d_px")
+            if d_mm is not None:
+                d_label = f"d={d_mm:.1f}мм"
+            elif d_px is not None:
+                d_label = f"d={d_px:.0f}px"
+            else:
+                d_label = "d=?"
+            mid_d = ((p_trc[0] + p_line[0]) // 2, (p_trc[1] + p_line[1]) // 2 - 15)
+            _put_text(img, d_label, mid_d, d_color, font_size=12)
 
         return img
 
@@ -265,6 +473,8 @@ class ImageAnnotator:
         img = ImageAnnotator.draw_hilgenreiner_line(image, keypoints)
         img = ImageAnnotator.draw_perkin_lines(img, keypoints)
         img = ImageAnnotator.draw_acetabular_angles(img, keypoints, metrics)
+        img = ImageAnnotator.draw_trc_distance(img, keypoints, metrics)
+        img = ImageAnnotator.draw_h_d_distances(img, keypoints, metrics)
         img = ImageAnnotator.draw_keypoints(img, keypoints,
                                              show_labels=show_labels)
 
