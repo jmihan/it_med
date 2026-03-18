@@ -99,9 +99,12 @@ class AnalysisPipeline:
             explainer = self._get_explainer(plugin)
             if explainer is not None:
                 try:
-                    heatmap = explainer.get_heatmap(image, class_id=1)  # Патология
+                    # GradCAM работает на ROI-кропе — именно на нём обучен ResNet
+                    roi_crop = results.get("roi_crop")
+                    gradcam_input = roi_crop if roi_crop is not None else image
+                    heatmap = explainer.get_heatmap(gradcam_input, class_id=1)  # Патология
                     results["heatmap"] = heatmap
-                    results["heatmap_overlay"] = ImageAnnotator.overlay_heatmap(image, heatmap)
+                    results["heatmap_overlay"] = ImageAnnotator.overlay_heatmap(gradcam_input, heatmap)
                     results["layer_images"]["gradcam"] = results["heatmap_overlay"]
                 except Exception as e:
                     print(f"[WARN] GradCAM ошибка: {e}")
@@ -115,6 +118,7 @@ class AnalysisPipeline:
         self,
         image_paths: List[str],
         plugin_name: str,
+        mode: str = 'doctor',
     ) -> Generator[Tuple[str, Dict[str, Any]], None, None]:
         """
         Пакетная обработка изображений.
@@ -141,7 +145,7 @@ class AnalysisPipeline:
 
             try:
                 image = load_image(path)
-                results = self.run(image, plugin_name, mode='doctor')
+                results = self.run(image, plugin_name, mode=mode)
                 results["image_id"] = image_id
                 results["source_path"] = path
                 yield image_id, results

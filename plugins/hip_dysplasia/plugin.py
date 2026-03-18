@@ -114,7 +114,6 @@ class HipDysplasiaPlugin(BaseMedicalPlugin):
                 {"key": "perkin_lines", "label": "Линии Перкина", "default": False},
                 {"key": "trc_distance", "label": "Расстояние TRC", "default": False},
                 {"key": "h_d_distances", "label": "Расстояния h и d", "default": False},
-                {"key": "gradcam", "label": "Тепловая карта (GradCAM)", "default": False},
             ],
         }
 
@@ -242,13 +241,14 @@ class HipDysplasiaPlugin(BaseMedicalPlugin):
             kp_result = {"keypoints": {}, "bbox": None, "detection_conf": 0.0}
         keypoints = kp_result["keypoints"]
 
-        # 2. Классификация нейросетью (ResNet)
-        # Classifier работает на обрезанном по ROI изображении — именно на таких данных обучался
+        # 2. ROI-кроп для классификатора и GradCAM
+        # Classifier обучен на кропах YOLO ROI — GradCAM тоже должен работать на кропе
+        roi_crop = self._crop_to_roi(image) if self.roi_detector is not None else image
+
         classification_result = None
         if self.classifier is not None:
             try:
-                image_for_cls = self._crop_to_roi(image) if self.roi_detector is not None else image
-                classification_result = self.classifier.predict(image_for_cls)
+                classification_result = self.classifier.predict(roi_crop)
             except Exception:
                 pass
 
@@ -267,14 +267,32 @@ class HipDysplasiaPlugin(BaseMedicalPlugin):
             subluxation_tolerance_px=sublux_tol,
         )
 
-        # 4. Определение патологии
-        if decision_mode == "resnet_primary" and classification_result is not None:
-            # ResNet — основной метод, геометрия — для отображения
-            pathology_detected = classification_result.get("class_id", 0) == 1
+        # 4. Определение патологии — два независимых источника
+        # ResNet вердикт
+        resnet_pathology = None
+        resnet_confidence = None
+        if classification_result is not None:
+            resnet_pathology = (classification_result.get("class_id", 0) == 1)
+            resnet_confidence = classification_result.get("prob_pathology", 0.0)
+
+        # Геометрический вердикт
+        geometric_pathology = None
+        geometric_confidence = None
+        if metrics.get("valid"):
+            geometric_pathology = metrics["pathology"]["any_pathology"]
+            angle_l = metrics.get("hilgenreiner_angle_left", 0) or 0
+            angle_r = metrics.get("hilgenreiner_angle_right", 0) or 0
+            geo_threshold = thresholds.get('hilgenreiner_angle_max_normal', 25.0)
+            max_angle = max(angle_l, angle_r)
+            margin = 5.0
+            geometric_confidence = min(1.0, abs(max_angle - geo_threshold) / margin)
+
+        # Единый вердикт для batch API и обратной совместимости
+        if decision_mode == "resnet_primary" and resnet_pathology is not None:
+            pathology_detected = resnet_pathology
             method = "resnet_primary"
-        elif metrics.get("valid"):
-            # Fallback на геометрию если ResNet недоступен
-            pathology_detected = metrics["pathology"]["any_pathology"]
+        elif geometric_pathology is not None:
+            pathology_detected = geometric_pathology
             method = "geometric"
         else:
             pathology_detected = False
@@ -283,6 +301,11 @@ class HipDysplasiaPlugin(BaseMedicalPlugin):
         # 5. Формирование результата
         return {
             "pathology_detected": pathology_detected,
+            "resnet_pathology": resnet_pathology,
+            "resnet_confidence": resnet_confidence,
+            "geometric_pathology": geometric_pathology,
+            "geometric_confidence": geometric_confidence,
+            "roi_crop": roi_crop,
             "keypoints": keypoints,
             "bbox": kp_result.get("bbox"),
             "detection_conf": kp_result.get("detection_conf", 0.0),

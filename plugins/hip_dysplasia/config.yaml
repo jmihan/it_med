@@ -1,17 +1,17 @@
 # Настройки плагина для анализа дисплазии тазобедренного сустава
 
 # Классификатор ResNet (опционально, второе мнение)
-classifier_weights: "weights/classifier_resnet50_cropped.pt"
+classifier_weights: "weights/classifier_resnet50_cropped.pt" #classifier.pt"
 classifier_backbone: "resnet50"
 
 # ROI-детектор YOLO (обрезка таза перед классификатором)
-roi_weights: "weights/hip_roi_v1.pt"
+roi_weights: "weights/hip_roi_v2.pt"
 roi_padding: 20
 
 # Детектор ключевых точек (YOLO Pose)
 model:
   name: "yolo11n_pose_hip"
-  weights_path: "weights/hip_keypoints_v1.pt"
+  weights_path: "weights/hip_keypoints_v2.pt"
   input_size: [640, 640]
   device: "cpu"  # "cpu" или "cuda"
   conf_threshold: 0.5
