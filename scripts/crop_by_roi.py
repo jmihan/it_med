@@ -32,17 +32,17 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts._utils import KP_DIR, scan_image_dir
+from scripts._utils import KP_DIR, scan_image_dir, PROJECT_ROOT
 
 
 # ── Загрузка ground-truth rect из VIA JSON ──────────────────────────────────
 
-def load_ground_truth_rects() -> dict[str, tuple[int, int, int, int]]:
+def load_ground_truth_rects(annotation_dir: Path) -> dict[str, tuple[int, int, int, int]]:
     """Возвращает {filename: (x, y, w, h)} из ручной разметки."""
     rects = {}
     for ann_file in ["annotations_norm.json", "annotations_patolog.json",
                      "annotations_test.json"]:
-        p = KP_DIR / ann_file
+        p = annotation_dir / ann_file
         if not p.exists():
             continue
         with open(p, encoding="utf-8") as f:
@@ -117,10 +117,13 @@ def main():
                         help="Запускать YOLO-детектор для изображений без аннотации")
     parser.add_argument("--roi-weights", default="weights/hip_roi_v1.pt",
                         help="Путь к весам YOLO ROI-детектора (для --detect)")
+    parser.add_argument("--annotation-dir", default=None,
+                        help="Директория с VIA JSON аннотациями (default: data/annotations/)")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
+    ann_dir = Path(args.annotation_dir) if args.annotation_dir else PROJECT_ROOT / "data" / "annotations"
 
     # Сканируем директорию с изображениями
     images = scan_image_dir(input_dir)
@@ -129,7 +132,7 @@ def main():
         return
 
     # Загружаем ROI из разных источников
-    gt_rects = load_ground_truth_rects()
+    gt_rects = load_ground_truth_rects(ann_dir)
     pred_rects = load_predicted_rects()
 
     # Ground-truth имеет приоритет над предсказаниями

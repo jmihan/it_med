@@ -4,17 +4,17 @@
 Читает rect-разметку из трёх файлов (norm, patolog, test),
 конвертирует в YOLO Detection формат для обучения детектора ROI.
 
-Входные файлы (в data/keypoints/):
-  annotations_norm.json    — 45 изображений нормы
-  annotations_patolog.json — 45 изображений патологии
-  annotations_test.json    — 24 тестовых изображения
+Входные файлы (по умолчанию в data/annotations/):
+  annotations_norm.json    — изображения нормы
+  annotations_patolog.json — изображения патологии
+  annotations_test.json    — тестовые изображения
 
 Выходной формат YOLO Detection .txt:
   <class_id> <cx> <cy> <w> <h>   (нормализованные [0,1])
 
 Использование:
   python scripts/convert_roi.py
-  python scripts/convert_roi.py --val-split 0.2 --seed 42
+  python scripts/convert_roi.py --annotation-dir data/annotations --val-split 0.2
 """
 
 import argparse
@@ -30,11 +30,9 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts._utils import KP_DIR, find_image, PROJECT_ROOT as ROOT
+from scripts._utils import find_image, PROJECT_ROOT as ROOT
 
-DEFAULT_NORM    = KP_DIR / "annotations_norm.json"
-DEFAULT_PATOLOG = KP_DIR / "annotations_patolog.json"
-DEFAULT_TEST    = KP_DIR / "annotations_test.json"
+DEFAULT_ANN_DIR = ROOT / "data" / "annotations"
 DEFAULT_OUT     = ROOT / "data" / "roi"
 
 CLASS_ID = 0   # единственный класс — roi
@@ -153,21 +151,30 @@ def main():
     parser = argparse.ArgumentParser(
         description="Конвертер VIA rect-аннотаций -> YOLO Detection датасет"
     )
-    parser.add_argument("--norm",       default=str(DEFAULT_NORM))
-    parser.add_argument("--patolog",    default=str(DEFAULT_PATOLOG))
-    parser.add_argument("--test",       default=str(DEFAULT_TEST))
+    parser.add_argument("--annotation-dir", default=str(DEFAULT_ANN_DIR),
+                        help="Директория с VIA JSON файлами (default: data/annotations/)")
+    parser.add_argument("--norm",       default=None,
+                        help="Переопределить путь к annotations_norm.json")
+    parser.add_argument("--patolog",    default=None,
+                        help="Переопределить путь к annotations_patolog.json")
+    parser.add_argument("--test",       default=None,
+                        help="Переопределить путь к annotations_test.json")
     parser.add_argument("--output-dir", default=str(DEFAULT_OUT))
     parser.add_argument("--val-split",  type=float, default=0.2)
     parser.add_argument("--seed",       type=int,   default=42)
     args = parser.parse_args()
 
+    ann_dir = Path(args.annotation_dir)
+    norm_path    = Path(args.norm)    if args.norm    else ann_dir / "annotations_norm.json"
+    patolog_path = Path(args.patolog) if args.patolog else ann_dir / "annotations_patolog.json"
+    test_path    = Path(args.test)    if args.test    else ann_dir / "annotations_test.json"
+
     output_dir = Path(args.output_dir)
 
     all_rects: dict[str, tuple] = {}
-    for label, path_str in [("norm", args.norm),
-                             ("patolog", args.patolog),
-                             ("test", args.test)]:
-        p = Path(path_str)
+    for label, p in [("norm", norm_path),
+                     ("patolog", patolog_path),
+                     ("test", test_path)]:
         if not p.exists():
             print(f"[WARN] файл не найден: {p}")
             continue
