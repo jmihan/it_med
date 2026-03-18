@@ -69,6 +69,10 @@ def main():
                         help="Имя эксперимента (default: hip_pose_v1)")
     parser.add_argument("--resume", action="store_true",
                         help="Возобновить обучение с последнего чекпоинта")
+    parser.add_argument("--tune", action="store_true",
+                        help="Запустить гиперпараметрическую настройку вместо обучения")
+    parser.add_argument("--tune-iterations", type=int, default=300,
+                        help="Количество итераций tune (default: 300)")
 
     args = parser.parse_args()
 
@@ -98,6 +102,27 @@ def main():
 
     # Путь к конфигу датасета
     dataset_yaml = str(PROJECT_ROOT / "data" / "keypoints" / "dataset.yaml")
+
+    # Гиперпараметрическая настройка
+    if args.tune:
+        print(f"\nЗапуск tune: {args.tune_iterations} итераций, imgsz={args.imgsz}")
+        print(f"Устройство: {args.device}")
+        print("=" * 60)
+
+        model.tune(
+            data=dataset_yaml,
+            epochs=args.epochs,
+            iterations=args.tune_iterations,
+            imgsz=args.imgsz,
+            batch=args.batch,
+            device=args.device,
+            project=str(PROJECT_ROOT / "runs" / "keypoints_tune"),
+            name=args.name,
+            exist_ok=True,
+        )
+        print("\nTune завершён!")
+        print(f"Результаты: {PROJECT_ROOT / 'runs' / 'keypoints_tune' / args.name}")
+        return
 
     # Обучение
     print(f"\nНачало обучения: {args.epochs} эпох, batch={args.batch}, imgsz={args.imgsz}")
