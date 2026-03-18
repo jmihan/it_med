@@ -11,12 +11,13 @@ point-регионы (игнорирует rect), конвертирует в YO
   annotations_test.json    — 24 тестовых изображения
 
 Выходной формат YOLO Pose .txt:
-  <class_id> <cx> <cy> <w> <h> <x0> <y0> <v0> ... <x7> <y7> <v7>
+  <class_id> <cx> <cy> <w> <h> <x0> <y0> <v0> ... <x9> <y9> <v9>
   Все координаты нормализованы в [0, 1].
 
-Порядок точек (8 штук):
+Порядок точек (10 штук):
   0: L_TRC  1: R_TRC  2: L_ACE  3: R_ACE
   4: L_FHC  5: R_FHC  6: L_FMM  7: R_FMM
+  8: L_FMP  9: R_FMP
 
 Использование:
   python scripts/convert_annotations.py

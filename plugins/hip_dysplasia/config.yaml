@@ -1,7 +1,12 @@
 # Настройки плагина для анализа дисплазии тазобедренного сустава
 
 # Классификатор ResNet (опционально, второе мнение)
-classifier_weights: "weights/classifier.pt"
+classifier_weights: "weights/classifier_resnet50_cropped.pt"
+classifier_backbone: "resnet50"
+
+# ROI-детектор YOLO (обрезка таза перед классификатором)
+roi_weights: "weights/hip_roi_v1.pt"
+roi_padding: 20
 
 # Детектор ключевых точек (YOLO Pose)
 model:
@@ -11,15 +16,21 @@ model:
   device: "cpu"  # "cpu" или "cuda"
   conf_threshold: 0.5
 
-# 8 ключевых точек
+# 10 ключевых точек
 keypoints:
-  names: ["L_TRC", "R_TRC", "L_ACE", "R_ACE", "L_FHC", "R_FHC", "L_FMM", "R_FMM"]
-  count: 8
+  names: ["L_TRC", "R_TRC", "L_ACE", "R_ACE", "L_FHC", "R_FHC", "L_FMM", "R_FMM", "L_FMP", "R_FMP"]
+  count: 10
 
-# Пороговые значения для постановки диагноза (в градусах)
+# Стратегия принятия решения: "resnet_primary" | "geometric"
+decision_mode: "resnet_primary"
+
+# Пороговые значения для постановки диагноза
 clinical_thresholds:
-  hilgenreiner_angle_max_normal: 30.0
+  hilgenreiner_angle_max_normal: 25.0   # Норма для ~6 мес: 20-25°
   alpha_angle_min_normal: 60.0
+  h_normal_mm: [8.0, 12.0]             # Высота h по Хильгенрейнеру (мм)
+  d_normal_mm: [10.0, 15.0]            # Дистанция d по Хильгенрейнеру (мм)
+  perkin_subluxation_tolerance_px: 10   # Толерантность для определения подвывиха (px)
 
 # Настройки визуализации
 visualization:
@@ -28,6 +39,7 @@ visualization:
     keypoints_ace: [255, 0, 0]     # Красный — крыша впадины
     keypoints_fhc: [0, 0, 255]     # Синий — головки бедра
     keypoints_fmm: [255, 165, 0]   # Оранжевый — метафизы
+    keypoints_fmp: [0, 255, 255]   # Жёлто-зелёный — верхний край метафиза
     hilgenreiner_line: [0, 255, 0] # Зелёный
     acetabular_line: [255, 165, 0] # Оранжевый
     perkin_line: [255, 255, 0]     # Жёлтый
